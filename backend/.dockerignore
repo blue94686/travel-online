@@ -1,0 +1,26 @@
+.venv
+__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# Runtime SQLite data is mounted by docker-compose through the scenic_data volume.
+app/data
+data
+
+# Large local imports are mounted explicitly by docker-compose when needed.
+tpt_data_jingdian.sql
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+
+tests
+scripts/__pycache__

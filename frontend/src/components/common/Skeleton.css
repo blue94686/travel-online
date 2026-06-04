@@ -1,0 +1,24 @@
+.skeleton {
+  background: linear-gradient(90deg, var(--color-border-light) 25%, #f0f4f3 50%, var(--color-border-light) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius-sm);
+}
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.skeleton-card {
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-card);
+}
+.skeleton-card .skeleton-img { width: 100%; aspect-ratio: 16/10; }
+.skeleton-card .skeleton-body { padding: 16px; display: grid; gap: 10px; }
+.skeleton-card .skeleton-line { height: 14px; }
+.skeleton-card .skeleton-line.short { width: 60%; }
+.skeleton-card .skeleton-line.medium { width: 80%; }
+.skeleton-detail-hero { width: 100%; height: 360px; border-radius: var(--radius-lg); }
+.skeleton-text-block { display: grid; gap: 8px; }

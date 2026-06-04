@@ -1,0 +1,383 @@
+{
+  "generatedAt": "2026-06-03T18:05:58",
+  "input": "backend/app/data/backups/tpt_data_jingdian-before-web-update-20260603-180214.sql",
+  "output": "tpt_data_jingdian.sql",
+  "officialReferenceUrls": [
+    "https://zwfw.mct.gov.cn/wycx/5ajlyjq/"
+  ],
+  "auxiliarySourceUrls": [
+    "https://services.kcloudtech.cn/geo/scenicspots",
+    "https://www.suchajun.com/lvyou/wuajingqu"
+  ],
+  "originalRows": 266908,
+  "finalRows": 268594,
+  "webRecordsFetched": 4011,
+  "webRecordsDeduped": 3983,
+  "webRecordsByLevel": {
+    "5A": 359,
+    "4A": 3624
+  },
+  "webRecordsByConfidence": {
+    "high_auxiliary": 3983
+  },
+  "sourceStats": {
+    "kcloud_provinces": 31,
+    "kcloud_4a_city_requests": 369
+  },
+  "matchCounts": {
+    "appended": 1686,
+    "coordinate_5km": 784,
+    "name_region": 1513
+  },
+  "matchedSamples": [
+    {
+      "record": "冶力关景区",
+      "level": "5A",
+      "row_id": 324499,
+      "reason": "appended"
+    },
+    {
+      "record": "官鹅沟景区",
+      "level": "5A",
+      "row_id": 121716,
+      "reason": "coordinate_5km"
+    },
+    {
+      "record": "崆峒山风景名胜区",
+      "level": "5A",
+      "row_id": 112400,
+      "reason": "name_region"
+    },
+    {
+      "record": "临夏州炳灵寺世界文化遗产旅游区",
+      "level": "5A",
+      "row_id": 324500,
+      "reason": "appended"
+    },
+    {
+      "record": "嘉峪关文物景区",
+      "level": "5A",
+      "row_id": 324501,
+      "reason": "appended"
+    },
+    {
+      "record": "七彩丹霞景区",
+      "level": "5A",
+      "row_id": 324502,
+      "reason": "appended"
+    },
+    {
+      "record": "敦煌鸣沙山月牙泉景区",
+      "level": "5A",
+      "row_id": 128318,
+      "reason": "coordinate_5km"
+    },
+    {
+      "record": "甘肃天水麦积山景区",
+      "level": "5A",
+      "row_id": 132111,
+      "reason": "coordinate_5km"
+    },
+    {
+      "record": "金华双龙风景旅游区",
+      "level": "5A",
+      "row_id": 65241,
+      "reason": "name_region"
+    },
+    {
+      "record": "杭州西溪湿地旅游区",
+      "level": "5A",
+      "row_id": 77815,
+      "reason": "coordinate_5km"
+    },
+    {
+      "record": "普陀山风景名胜区",
+      "level": "5A",
+      "row_id": 70915,
+      "reason": "name_region"
+    },
+    {
+      "record": "天一阁·月湖景区",
+      "level": "5A",
+      "row_id": 77175,
+      "reason": "coordinate_5km"
+    },
+    {
+      "record": "雁荡山风景名胜区",
+      "level": "5A",
+      "row_id": 172148,
+      "reason": "name_region"
+    },
+    {
+      "record": "神仙居景区",
+      "level": "5A",
+      "row_id": 70895,
+      "reason": "name_region"
+    },
+    {
+      "record": "刘伯温故里景区",
+      "level": "5A",
+      "row_id": 324503,
+      "reason": "appended"
+    },
+    {
+      "record": "鲁迅故里沈园景区",
+      "level": "5A",
+      "row_id": 82952,
+      "reason": "coordinate_5km"
+    },
+    {
+      "record": "西塘古镇旅游景区",
+      "level": "5A",
+      "row_id": 172018,
+      "reason": "name_region"
+    },
+    {
+      "record": "江郎山·廿八都景区",
+      "level": "5A",
+      "row_id": 324504,
+      "reason": "appended"
+    },
+    {
+      "record": "桐乡乌镇古镇旅游区",
+      "level": "5A",
+      "row_id": 324505,
+      "reason": "appended"
+    },
+    {
+      "record": "南浔古镇景区",
+      "level": "5A",
+      "row_id": 87890,
+      "reason": "name_region"
+    },
+    {
+      "record": "开化根宫佛国文化旅游景区",
+      "level": "5A",
+      "row_id": 53439,
+      "reason": "coordinate_5km"
+    },
+    {
+      "record": "东阳横店影视城景区",
+      "level": "5A",
+      "row_id": 64516,
+      "reason": "coordinate_5km"
+    },
+    {
+      "record": "西湖风景名胜区",
+      "level": "5A",
+      "row_id": 324506,
+      "reason": "appended"
+    },
+    {
+      "record": "奉化溪口-滕头旅游景区",
+      "level": "5A",
+      "row_id": 324507,
+      "reason": "appended"
+    },
+    {
+      "record": "千岛湖风景名胜区",
+      "level": "5A",
+      "row_id": 53888,
+      "reason": "name_region"
+    },
+    {
+      "record": "南湖旅游区",
+      "level": "5A",
+      "row_id": 324508,
+      "reason": "appended"
+    },
+    {
+      "record": "梯田景区",
+      "level": "5A",
+      "row_id": 324509,
+      "reason": "appended"
+    },
+    {
+      "record": "天台山景区",
+      "level": "5A",
+      "row_id": 61717,
+      "reason": "name_region"
+    },
+    {
+      "record": "台州府城文化旅游区",
+      "level": "5A",
+      "row_id": 324510,
+      "reason": "appended"
+    },
+    {
+      "record": "缙云仙都景区",
+      "level": "5A",
+      "row_id": 324511,
+      "reason": "appended"
+    },
+    {
+      "record": "丹霞山景区",
+      "level": "5A",
+      "row_id": 101904,
+      "reason": "name_region"
+    },
+    {
+      "record": "白云山风景区",
+      "level": "5A",
+      "row_id": 4248,
+      "reason": "name_region"
+    },
+    {
+      "record": "深圳华侨城旅游度假区",
+      "level": "5A",
+      "row_id": 101492,
+      "reason": "name_region"
+    },
+    {
+      "record": "星湖旅游景区",
+      "level": "5A",
+      "row_id": 324512,
+      "reason": "appended"
+    },
+    {
+      "record": "长鹿旅游休博园",
+      "level": "5A",
+      "row_id": 161072,
+      "reason": "name_region"
+    },
+    {
+      "record": "罗浮山景区",
+      "level": "5A",
+      "row_id": 108019,
+      "reason": "name_region"
+    },
+    {
+      "record": "观澜湖休闲旅游区",
+      "level": "5A",
+      "row_id": 88553,
+      "reason": "coordinate_5km"
+    },
+    {
+      "record": "雁南飞茶田景区",
+      "level": "5A",
+      "row_id": 83362,
+      "reason": "coordinate_5km"
+    },
+    {
+      "record": "开平碉楼文化旅游区",
+      "level": "5A",
+      "row_id": 95762,
+      "reason": "coordinate_5km"
+    },
+    {
+      "record": "万绿湖风景区",
+      "level": "5A",
+      "row_id": 99498,
+      "reason": "name_region"
+    },
+    {
+      "record": "西樵山景区",
+      "level": "5A",
+      "row_id": 86635,
+      "reason": "name_region"
+    },
+    {
+      "record": "孙中山故里旅游区",
+      "level": "5A",
+      "row_id": 324513,
+      "reason": "appended"
+    },
+    {
+      "record": "海陵岛大角湾海上丝路旅游区",
+      "level": "5A",
+      "row_id": 76431,
+      "reason": "coordinate_5km"
+    },
+    {
+      "record": "长隆旅游度假区",
+      "level": "5A",
+      "row_id": 5148,
+      "reason": "name_region"
+    },
+    {
+      "record": "连州地下河旅游景区",
+      "level": "5A",
+      "row_id": 104899,
+      "reason": "name_region"
+    },
+    {
+      "record": "惠州西湖旅游景区",
+      "level": "5A",
+      "row_id": 110835,
+      "reason": "name_region"
+    },
+    {
+      "record": "世界雕塑公园旅游景区",
+      "level": "5A",
+      "row_id": 44276,
+      "reason": "coordinate_5km"
+    },
+    {
+      "record": "长白山景区",
+      "level": "5A",
+      "row_id": 39638,
+      "reason": "name_region"
+    },
+    {
+      "record": "六鼎山文化旅游区",
+      "level": "5A",
+      "row_id": 140027,
+      "reason": "coordinate_5km"
+    },
+    {
+      "record": "高句丽文物古迹旅游景区",
+      "level": "5A",
+      "row_id": 36273,
+      "reason": "name_region"
+    }
+  ],
+  "unmatchedCount": 0,
+  "unmatchedSamples": [],
+  "parseErrors": [],
+  "schema": [
+    "id",
+    "title",
+    "tel",
+    "add",
+    "type",
+    "areaid",
+    "poiid",
+    "gcjx",
+    "gcjy",
+    "gpsx",
+    "gpsy",
+    "province",
+    "city",
+    "district",
+    "main_category",
+    "theme_slugs",
+    "theme_names",
+    "tags",
+    "summary",
+    "description",
+    "best_season",
+    "audience",
+    "recommended_duration",
+    "route_idea",
+    "quality_score",
+    "data_version",
+    "updated_at",
+    "official_level",
+    "level_source",
+    "level_source_url",
+    "level_verified_at",
+    "a_level_year",
+    "web_province",
+    "web_city",
+    "web_district",
+    "web_address",
+    "web_longitude",
+    "web_latitude",
+    "web_source_confidence",
+    "web_update_note"
+  ],
+  "dryRun": false,
+  "appendMissing": true,
+  "rootSqlBackup": "/Users/shaoyuhao/Desktop/sk/游玩/旅游/backend/app/data/backups/tpt_data_jingdian-before-web-update-20260603-180558.sql",
+  "mirrorSqlBackup": "/Users/shaoyuhao/Desktop/sk/游玩/旅游/backend/app/data/backups/tpt_data_jingdian-before-web-update-20260603-180600.sql"
+}

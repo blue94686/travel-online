@@ -1,0 +1,61 @@
+name: scenic-online
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: scenic-online-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: scenic_online
+      POSTGRES_USER: scenic
+      POSTGRES_PASSWORD: scenic
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scenic -d scenic_online"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: scenic-online-backend
+    container_name: scenic-online-backend
+    restart: always
+    volumes:
+      - scenic_data:/app/backend/app/data
+      - ./tpt_data_jingdian.sql:/app/backend/tpt_data_jingdian.sql:ro
+    environment:
+      - DEBUG=False
+      - DATABASE_URL=postgresql://scenic:scenic@postgres:5432/scenic_online
+      - TPT_JINGDIAN_SQL_PATH=/app/backend/tpt_data_jingdian.sql
+      # - CORS_ORIGINS=http://example.com,https://example.com # Uncomment if frontend is on a different domain
+      # - AMAP_WEB_SERVICE_KEY=your_key
+      # - MAPBOX_TOKEN=your_token
+      # - QWEATHER_KEY=your_key
+      # - AMAP_WEATHER_KEY=your_key
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: scenic-online-frontend
+    container_name: scenic-online-frontend
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  scenic_data:
+  postgres_data:

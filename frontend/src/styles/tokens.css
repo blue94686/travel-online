@@ -1,0 +1,92 @@
+:root {
+  /* Primary Brand Colors - Refreshing Teal/Cyan */
+  --color-primary: #14B8A6; /* Teal 500 */
+  --color-primary-dark: #0D9488;
+  --color-primary-soft: #F0FDFA;
+  --color-primary-hover: #0F766E;
+
+  /* Secondary / Accent Colors */
+  --color-lake: #06B6D4; /* Cyan 500 */
+  --color-sky: #38BDF8;
+  --color-sky-soft: #F0F9FF;
+  --color-sun: #FBBF24;
+  --color-orange: #F59E0B;
+  --color-danger: #EF4444;
+  --color-success: #16A34A;
+  --color-warning: #D97706;
+
+  /* Background Colors */
+  --color-bg: #FFFFFF; /* Pure white for clean minimalist feel */
+  --color-bg-alt: #F8FAFC; /* Slate 50 */
+  --color-bg-wash: #F3F8F7;
+  --color-surface: rgba(255, 255, 255, 0.94);
+  --color-surface-strong: #FFFFFF;
+  --color-card: #FFFFFF;
+  --color-border: #F1F5F9; /* Slate 100 - Very soft border */
+  --color-border-light: #F8FAFC;
+
+  /* Typography Colors */
+  --color-text: #334155; /* Slate 700 - softer than pure black */
+  --color-heading: #0F172A; /* Slate 900 */
+  --color-muted: #94A3B8; /* Slate 400 */
+  
+  /* Typography Scale */
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.5rem;
+  --text-3xl: 2rem;
+
+  /* Spacing */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+
+  /* Radii - Softer, friendlier */
+  --radius-sm: 12px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --radius-xl: 32px;
+  --radius-full: 9999px;
+
+  /* Shadows - Extremely light for a flat, airy feel */
+  --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.02);
+  --shadow-card: 0 12px 32px rgba(0, 0, 0, 0.03);
+  --shadow-hover: 0 20px 48px rgba(0, 0, 0, 0.05);
+  --shadow-float: 0 32px 64px rgba(0, 0, 0, 0.08);
+  --shadow-travel: 0 24px 70px rgba(12, 74, 83, .12);
+  --shadow-focus: 0 0 0 4px rgba(20, 184, 166, .18);
+
+  /* Interaction */
+  --tap-target: 44px;
+  --motion-fast: 160ms;
+  --motion-base: 220ms;
+  --motion-slow: 320ms;
+  --ease-standard: cubic-bezier(.2, .8, .2, 1);
+  --z-nav: 100;
+  --z-dropdown: 160;
+  --z-modal: 1000;
+
+  /* Admin Tokens */
+  --admin-sidebar: #0F172A;
+  --admin-sidebar-deep: #020617;
+  --admin-sidebar-active: #14B8A6;
+  --admin-primary: #14B8A6;
+  --admin-primary-soft: #F0FDFA;
+  --admin-bg: #F8FAFC;
+  --admin-card: #FFFFFF;
+  --admin-border: #E2E8F0;
+  --admin-text: #1E293B;
+  --admin-muted: #64748B;
+  --admin-orange: #F59E0B;
+  --admin-danger: #EF4444;
+  --admin-shadow: 0 16px 42px rgba(15, 49, 75, .07);
+}

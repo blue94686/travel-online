@@ -1,0 +1,221 @@
+/* UserStatsCard.css */
+
+.user-stats-card {
+  background: var(--color-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  color: var(--color-text);
+}
+
+.level-badge {
+  background: var(--color-sun);
+  color: white;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  display: inline-block;
+}
+
+/* --- Variant: Sidebar --- */
+.variant-sidebar {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+}
+
+.variant-sidebar img {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid var(--color-primary-soft);
+}
+
+.sidebar-info h3 {
+  margin: 0 0 4px 0;
+  font-size: var(--text-lg);
+  color: var(--color-heading);
+}
+
+.sidebar-stats {
+  display: flex;
+  justify-content: center;
+  gap: 24px;
+  width: 100%;
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border);
+}
+
+.sidebar-stats div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.sidebar-stats strong {
+  font-size: var(--text-lg);
+  color: var(--color-heading);
+}
+
+.sidebar-stats span {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+}
+
+/* --- Variant: Dashboard --- */
+.variant-dashboard {
+  display: flex;
+  align-items: stretch;
+  background: url('/images/hero-mountain-lake.jpg') center/cover;
+  position: relative;
+  overflow: hidden;
+  color: white;
+  min-height: 240px;
+}
+
+.variant-dashboard::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to right, rgba(6, 62, 90, 0.9) 30%, rgba(6, 62, 90, 0.4));
+  z-index: 1;
+}
+
+.dashboard-profile, .dashboard-level-box {
+  position: relative;
+  z-index: 2;
+  padding: 32px;
+}
+
+.dashboard-profile {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 32px;
+}
+
+.dashboard-avatar {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  border: 4px solid rgba(255, 255, 255, 0.2);
+  object-fit: cover;
+}
+
+.dashboard-info .title-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.dashboard-info h1 {
+  margin: 0;
+  font-size: var(--text-3xl);
+  font-weight: 700;
+  color: white;
+}
+
+.dashboard-info p {
+  color: rgba(255, 255, 255, 0.8);
+  margin: 0 0 24px 0;
+  font-size: var(--text-base);
+}
+
+.stats-row {
+  display: flex;
+  gap: 32px;
+  flex-wrap: wrap;
+}
+
+.stats-row span {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--text-sm);
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.stats-row strong {
+  font-size: var(--text-2xl);
+  color: white;
+  font-weight: 600;
+}
+
+.dashboard-level-box {
+  width: 320px;
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(12px);
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.dashboard-level-box .title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 12px;
+}
+
+.dashboard-level-box h3 {
+  margin: 0;
+  font-size: var(--text-xl);
+  color: white;
+}
+
+.exp-text {
+  font-size: var(--text-sm);
+  color: rgba(255, 255, 255, 0.8);
+  font-family: monospace;
+}
+
+.progress-bar {
+  height: 8px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--color-sun);
+  border-radius: 999px;
+}
+
+.level-hint {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: rgba(255, 255, 255, 0.7);
+}
+
+@media (max-width: 900px) {
+  .variant-dashboard {
+    flex-direction: column;
+  }
+  .dashboard-profile {
+    flex-direction: column;
+    text-align: center;
+    gap: 16px;
+  }
+  .dashboard-info .title-row {
+    justify-content: center;
+  }
+  .stats-row {
+    justify-content: center;
+    gap: 16px;
+  }
+  .dashboard-level-box {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "scenic-online-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "check:pages": "node ../scripts/check-pages.mjs",
+    "check:responsive": "node ../scripts/capture-responsive.mjs",
+    "check:buttons": "node ../scripts/check-buttons.mjs"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.24.0",
+    "recharts": "^2.15.4",
+    "vite": "^5.3.1"
+  },
+  "devDependencies": {
+    "playwright": "^1.60.0"
+  }
+}
