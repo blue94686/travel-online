@@ -91,6 +91,14 @@ The public frontend must expose the data that admin workflows manage. The pages 
 - Make active tabs and selected filters visually obvious.
 - Keep scenic cards compact enough for comparison while preserving image and key metadata.
 - Add clearer province/city/district browsing states backed by the imported national source table.
+- Add an interactive China map browser inside the "探索中国" destination experience:
+  - show a clean province/region map panel instead of only a text province list,
+  - color provinces by scenic count or completion density,
+  - allow clicking each province or autonomous region,
+  - open a modal with province scenic count, city count, representative scenic areas, popular/5A hints when available, and links into province detail and filtered scenic browsing,
+  - keep the existing grouped province list as a scannable fallback below or beside the map,
+  - make the map usable by keyboard and on mobile through province buttons/list selection.
+- The first implementation may use a lightweight custom SVG or positioned region-button map if no local province GeoJSON exists. Do not block the feature on installing a heavy map package.
 
 #### Scenic Detail
 
@@ -194,6 +202,7 @@ Likely files to touch during implementation:
 - `frontend/src/pages/HomePage.jsx`
 - `frontend/src/pages/SearchPage.jsx`
 - `frontend/src/pages/DestinationsPage.jsx`
+- `frontend/src/components/common/ChinaProvinceMap.jsx`
 - `frontend/src/pages/ScenicDetailPage.jsx`
 - `frontend/src/pages/admin/AdminOperationsPage.jsx`
 - `frontend/src/pages/admin/AdminDataPage.jsx`
@@ -236,6 +245,7 @@ If existing tests assert old copy or class names that are intentionally improved
 
 - Public frontend feels cleaner, calmer, and easier to scan without losing the current travel identity.
 - Public frontend shows enriched scenic introductions, image coverage, nearby food, hiking/trail information, and source labels when available.
+- The "探索中国" province tab includes an interactive China map; selecting a province opens a modal with province metrics, scenic previews, city entry points, and links to continue browsing.
 - Admin console presents data in a more complete and management-friendly way.
 - Admin console feels like a complete management platform, with clear entry points for scenic records, content, images, comments, enrichment, data source, database, layout, users, roles, security, services, logs, and settings.
 - Crawler completion, candidate pool, image links, low-risk POI, food POI, and hiking POI are discoverable from admin workflows.
