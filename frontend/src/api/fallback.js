@@ -64,3 +64,13 @@ export function getScenicPlaceholder(scenic) {
 export function getScenicImageOrPlaceholder(scenic) {
   return getScenicImage(scenic) || getScenicPlaceholder(scenic)
 }
+
+export function getScenicGalleryImages(scenic, { includePlaceholder = true } = {}) {
+  const images = [
+    scenic?.cover_image_url,
+    ...((Array.isArray(scenic?.gallery) ? scenic.gallery : []) || []),
+  ].filter(image => typeof image === 'string' && image.startsWith('http'))
+  const unique = Array.from(new Set(images)).slice(0, 8)
+  if (unique.length > 0) return unique
+  return includePlaceholder ? [getScenicPlaceholder(scenic)] : []
+}

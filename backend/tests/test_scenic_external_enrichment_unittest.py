@@ -1,6 +1,7 @@
 import sqlite3
 import unittest
 from contextlib import contextmanager
+from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
 
 from app.core.database import SCHEMA, migrate_db
@@ -81,7 +82,7 @@ class ScenicExternalEnrichmentTest(unittest.TestCase):
 
         def assertions(conn):
             with patch.object(external_service, "_http_get_json", fake_get_json):
-                result = external_service.external_enrich_profile_batch(limit=1, offset=0, include_public_sources=False)
+                result = external_service.external_enrich_profile_batch(limit=1, offset=0, include_public_sources=False, include_paid_providers=True)
 
             self.assertEqual(result["requested"], 1)
             self.assertEqual(result["searched"], 1)
@@ -148,6 +149,170 @@ class ScenicExternalEnrichmentTest(unittest.TestCase):
         self.assertIn("漓江", external_service._title_variants("桂林漓江风景区"))
         self.assertIn("千岛湖", external_service._title_variants("千岛湖风景区"))
         self.assertIn("雷峰塔", external_service._title_variants("雷峰塔景区"))
+
+    def test_commons_lookup_tries_short_title_fallbacks(self):
+        calls = []
+
+        def fake_get_json(url, headers=None, timeout=8, retries=2):
+            calls.append(url)
+            search = parse_qs(urlparse(url).query).get("gsrsearch", [""])[0]
+            if search != "天津古文化街":
+                return {"query": {"pages": {}}}
+            return {
+                "query": {
+                    "pages": {
+                        "1": {
+                            "title": "File:Tianjin Ancient Culture Street.jpg",
+                            "imageinfo": [
+                                {
+                                    "url": "https://upload.wikimedia.org/tianjin.jpg",
+                                    "thumburl": "https://upload.wikimedia.org/tianjin-thumb.jpg",
+                                    "descriptionurl": "https://commons.wikimedia.org/wiki/File:Tianjin.jpg",
+                                    "extmetadata": {"LicenseShortName": {"value": "CC BY-SA 4.0"}},
+                                }
+                            ],
+                        }
+                    }
+                }
+            }
+
+        scenic = {"id": 3, "name": "天津古文化街旅游区", "province": "天津市", "city": "天津市", "district": "南开区"}
+        with patch.object(external_service, "_http_get_json", fake_get_json):
+            images = external_service._commons_image_candidates(scenic)
+
+        self.assertGreaterEqual(len(calls), 2)
+        self.assertEqual(images[0]["image_url"], "https://upload.wikimedia.org/tianjin.jpg")
+
+    def test_commons_lookup_falls_back_to_nearby_geo_images(self):
+        calls = []
+
+        def fake_get_json(url, headers=None, timeout=8, retries=2):
+            calls.append(url)
+            params = parse_qs(urlparse(url).query)
+            if params.get("generator", [""])[0] != "geosearch":
+                return {"query": {"pages": {}}}
+            self.assertEqual(params.get("ggscoord", [""])[0], "30.24|120.14")
+            self.assertEqual(params.get("ggsnamespace", [""])[0], "6")
+            return {
+                "query": {
+                    "pages": {
+                        "9": {
+                            "title": "File:West Lake geo.jpg",
+                            "coordinates": [{"lat": 30.241, "lon": 120.139, "dist": 120}],
+                            "imageinfo": [
+                                {
+                                    "url": "https://upload.wikimedia.org/west-lake-geo.jpg",
+                                    "thumburl": "https://upload.wikimedia.org/west-lake-geo-thumb.jpg",
+                                    "descriptionurl": "https://commons.wikimedia.org/wiki/File:West_Lake_geo.jpg",
+                                    "extmetadata": {"LicenseShortName": {"value": "CC BY-SA 4.0"}},
+                                }
+                            ],
+                        }
+                    }
+                }
+            }
+
+        scenic = {"id": 4, "name": "测试西湖景区", "province": "浙江省", "city": "杭州市", "district": "西湖区", "latitude": 30.24, "longitude": 120.14}
+        with patch.object(external_service, "_http_get_json", fake_get_json):
+            images = external_service._commons_image_candidates(scenic)
+
+        self.assertTrue(any("generator=geosearch" in url for url in calls))
+        self.assertEqual(images[0]["image_url"], "https://upload.wikimedia.org/west-lake-geo.jpg")
+
+    def test_commons_lookup_ignores_pdf_and_djvu_files(self):
+        def fake_get_json(url, headers=None, timeout=8, retries=2):
+            return {
+                "query": {
+                    "pages": {
+                        "1": {
+                            "title": "File:Scenic archive.pdf",
+                            "imageinfo": [
+                                {
+                                    "url": "https://upload.wikimedia.org/archive.pdf",
+                                    "mime": "application/pdf",
+                                    "descriptionurl": "https://commons.wikimedia.org/wiki/File:Archive.pdf",
+                                    "extmetadata": {"LicenseShortName": {"value": "CC BY-SA 4.0"}},
+                                }
+                            ],
+                        },
+                        "2": {
+                            "title": "File:Scenic photo.jpg",
+                            "imageinfo": [
+                                {
+                                    "url": "https://upload.wikimedia.org/photo.jpg",
+                                    "mime": "image/jpeg",
+                                    "descriptionurl": "https://commons.wikimedia.org/wiki/File:Photo.jpg",
+                                    "extmetadata": {"LicenseShortName": {"value": "CC BY-SA 4.0"}},
+                                }
+                            ],
+                        },
+                    }
+                }
+            }
+
+        scenic = {"id": 7, "name": "测试景区", "province": "浙江省", "city": "杭州市", "district": ""}
+        with patch.object(external_service, "_http_get_json", fake_get_json):
+            images = external_service._commons_image_candidates(scenic)
+
+        self.assertEqual([item["image_url"] for item in images], ["https://upload.wikimedia.org/photo.jpg"])
+
+    def test_openverse_candidates_map_license_and_attribution(self):
+        def fake_get_json(url, headers=None, timeout=8, retries=2):
+            self.assertIn("api.openverse.org/v1/images/", url)
+            return {
+                "results": [
+                    {
+                        "title": "测试西湖实景",
+                        "url": "https://images.openverse.test/west-lake.jpg",
+                        "thumbnail": "https://images.openverse.test/west-lake-thumb.jpg",
+                        "foreign_landing_url": "https://source.test/west-lake",
+                        "creator": "Open Photographer",
+                        "creator_url": "https://creator.test",
+                        "license": "by-sa",
+                        "license_version": "4.0",
+                        "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+                        "provider": "flickr",
+                        "source": "flickr",
+                    }
+                ]
+            }
+
+        scenic = {"id": 5, "name": "测试西湖景区", "province": "浙江省", "city": "杭州市", "district": "西湖区"}
+        with patch.object(external_service, "_http_get_json", fake_get_json):
+            images = external_service._openverse_image_candidates(scenic)
+
+        self.assertEqual(images[0]["image_url"], "https://images.openverse.test/west-lake.jpg")
+        self.assertEqual(images[0]["source_name"], "Openverse")
+        self.assertEqual(images[0]["license"], "CC BY-SA 4.0")
+        self.assertEqual(images[0]["attribution"], "Open Photographer")
+
+    def test_public_source_bundle_uses_openverse_when_wikimedia_is_rate_limited(self):
+        scenic = {"id": 6, "name": "测试山景区", "province": "四川省", "city": "阿坝州", "district": ""}
+        openverse_image = external_service._image_candidate(
+            scenic,
+            image_url="https://images.openverse.test/mountain.jpg",
+            thumbnail_url="https://images.openverse.test/mountain-thumb.jpg",
+            source_url="https://source.test/mountain",
+            title="测试山",
+            source_name="Openverse",
+            source_type="openverse",
+            confidence=0.5,
+            risk_level="medium",
+            raw={},
+            license_name="CC BY 4.0",
+            attribution="Tester",
+        )
+
+        with (
+            patch.object(external_service, "_wikipedia_candidates", side_effect=RuntimeError("external request failed: HTTP Error 429: Too Many Requests")),
+            patch.object(external_service, "_wikivoyage_candidates", side_effect=RuntimeError("external request failed: HTTP Error 429: Too Many Requests")),
+            patch.object(external_service, "_commons_image_candidates", side_effect=RuntimeError("external request failed: HTTP Error 429: Too Many Requests")),
+            patch.object(external_service, "_openverse_image_candidates", return_value=[openverse_image]),
+        ):
+            _profiles, images, failures = external_service.public_source_bundle_detailed(scenic, include_osm=False)
+
+        self.assertEqual(images[0]["image_url"], "https://images.openverse.test/mountain.jpg")
+        self.assertTrue(any(item["provider"] == "wikimedia_commons" and item["status"] == "rate_limited" for item in failures))
 
     def test_amap_candidates_extract_profile_and_photo_candidates(self):
         def fake_get_json(url, headers=None, timeout=8, retries=2):

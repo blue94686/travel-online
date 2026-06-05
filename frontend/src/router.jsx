@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react'
-import { Navigate, useLocation } from 'react-router-dom'
+import { Navigate, useLocation, useParams } from 'react-router-dom'
 import { createBrowserRouter } from 'react-router-dom'
 import App from './App.jsx'
 import PageShell from './components/common/PageShell.jsx'
@@ -51,6 +51,12 @@ function LegacyRedirect({ to }) {
   return <Navigate to={`${to}${location.search ? `${joiner}${location.search.slice(1)}` : ''}${location.hash || ''}`} replace />
 }
 
+function LegacyProvinceRedirect() {
+  const location = useLocation()
+  const { province = '' } = useParams()
+  return <Navigate to={`/provinces/${encodeURIComponent(province)}${location.search || ''}${location.hash || ''}`} replace />
+}
+
 // Suspense Wrapper
 const withSuspense = (Component) => (
   <Suspense fallback={<div style={{ padding: 40 }}><SkeletonList count={3} /></div>}>
@@ -73,6 +79,8 @@ export const router = createBrowserRouter([
           { path: 'themes/:slug', element: withSuspense(ThemesPage) },
           { path: 'provinces', element: withSuspense(ProvinceDetailPage) },
           { path: 'provinces/:province', element: withSuspense(ProvinceDetailPage) },
+          { path: 'province', element: <LegacyRedirect to="/provinces" /> },
+          { path: 'province/:province', element: <LegacyProvinceRedirect /> },
           { path: 'scenic/:id', element: withSuspense(ScenicDetailPage) },
           { path: 'map', element: <LegacyRedirect to="/trip-planning?tab=map" /> },
           { path: 'weather', element: <LegacyRedirect to="/trip-planning?tab=weather" /> },

@@ -135,10 +135,19 @@ export const approveLowRiskCrawlerCandidates = (extra = {}) => {
   const query = toQuery(extra)
   return request(`/api/admin/enrichment/crawler/approve-low-risk${query ? `?${query}` : ''}`, { method: 'POST' }, null)
 }
+export const mergeCrawlerProfilesDirect = (extra = {}) => {
+  const query = toQuery(extra)
+  return request(`/api/admin/enrichment/crawler/merge-profiles-direct${query ? `?${query}` : ''}`, { method: 'POST' }, null)
+}
 export const getWebEnrichmentOverview = () => request('/api/admin/web-enrichment/overview', {}, null)
 export const getWebEnrichmentCandidates = (extra = {}) => {
   const query = toQuery(extra)
   return request(`/api/admin/web-enrichment/candidates${query ? `?${query}` : ''}`, {}, null)
+}
+export const getPoiIndexStats = () => request('/api/admin/enrichment/poi-index/stats', {}, null)
+export const backfillPoiIndex = (extra = {}) => {
+  const query = toQuery(extra)
+  return request(`/api/admin/enrichment/poi-index/backfill${query ? `?${query}` : ''}`, { method: 'POST' }, null)
 }
 export const getServiceLogs = (name) => request(`/api/admin/services/${encodeURIComponent(name)}/logs`, {}, null)
 export const toggleService = (name) => request(`/api/admin/services/${encodeURIComponent(name)}/toggle`, { method: 'POST' })

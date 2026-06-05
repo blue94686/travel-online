@@ -268,15 +268,7 @@ def import_scenic_sql(db, sql_path=None, limit=None, province_filter="", offset=
     if batch:
         inserted += _flush(db, fields, batch, errors)
     status = "finished" if limit is None else "paused"
-    db.execute(
-        """
-        UPDATE scenic_import_tasks
-        SET status=?, imported_rows=?, duplicate_rows=?, failed_rows=?, current_offset=?, finished_at=CASE WHEN ?='finished' THEN CURRENT_TIMESTAMP ELSE finished_at END,
-            message=?
-        WHERE id=?
-        """,
-        (status, inserted, duplicate, missing + len(errors), offset + consumed, status, "导入完成" if status == "finished" else "批次导入完成，可继续", task_id),
-    )
+    _finish_import_task(db, task_id, status, inserted, duplicate, missing + len(errors), offset + consumed)
     return info | {
         "task_id": task_id,
         "imported_count": inserted,
@@ -294,10 +286,38 @@ def _create_import_task(db, sql_path, total_rows, offset, batch_size, province_f
         """
         INSERT INTO scenic_import_tasks (file_path,status,total_rows,current_offset,batch_size,province_filter,message)
         VALUES (?,?,?,?,?,?,?)
+        RETURNING id
         """,
         (str(sql_path), "running", total_rows, offset, batch_size, province_filter, "正在导入"),
     )
+    if hasattr(cur, "fetchone"):
+        row = cur.fetchone()
+        if row:
+            return row["id"] if isinstance(row, dict) else row[0]
     return cur.lastrowid
+
+
+def _finish_import_task(db, task_id, status, imported_rows, duplicate_rows, failed_rows, current_offset):
+    message = "导入完成" if status == "finished" else "批次导入完成，可继续"
+    if status == "finished":
+        db.execute(
+            """
+            UPDATE scenic_import_tasks
+            SET status=?, imported_rows=?, duplicate_rows=?, failed_rows=?, current_offset=?,
+                finished_at=CURRENT_TIMESTAMP, message=?
+            WHERE id=?
+            """,
+            (status, imported_rows, duplicate_rows, failed_rows, current_offset, message, task_id),
+        )
+    else:
+        db.execute(
+            """
+            UPDATE scenic_import_tasks
+            SET status=?, imported_rows=?, duplicate_rows=?, failed_rows=?, current_offset=?, message=?
+            WHERE id=?
+            """,
+            (status, imported_rows, duplicate_rows, failed_rows, current_offset, message, task_id),
+        )
 
 
 def _record_import_error(db, task_id, row_number, row, error_message):

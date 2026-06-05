@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import subprocess
 import sys
 import threading
@@ -6,14 +7,31 @@ import time
 from datetime import datetime
 
 from app.core.database import get_db, row_to_dict, rows_to_list
-from app.services.amap_service import search_amap_pois
+from app.services.amap_service import amap_marker_url, search_amap_pois
 from app.services.audit_service import write_audit
 from app.services.provider_config_service import get_secret
+from app.services.scenic_quality_score_service import calculate_completeness_score
 from app.services.scenic_external_enrichment_service import public_source_bundle_detailed, public_sources_blocked_seconds
 
 
 JOB_NAME = "scenic_crawler_enrichment"
 HIKING_TERMS = ("山", "峰", "岭", "峡", "谷", "森林", "步道", "栈道", "长城", "草原")
+DIRECT_PROFILE_SOURCE_TYPES = {"wikipedia", "wikivoyage", "openstreetmap_overpass", "crawler_poi"}
+DIRECT_PROFILE_TYPES = {"summary", "summary_full", "description", "nearby_food", "nearby_poi", "hiking_poi"}
+METRIC_KEY_MAP = {
+    "totalscenic": "totalScenic",
+    "missingimages": "missingImages",
+    "undertargetimages": "underTargetImages",
+    "spotswith3images": "spotsWith3Images",
+    "spotswith4images": "spotsWith4Images",
+    "missingprofiles": "missingProfiles",
+    "missingfood": "missingFood",
+    "missingpois": "missingPois",
+    "pendingprofilecandidates": "pendingProfileCandidates",
+    "lowriskprofilecandidates": "lowRiskProfileCandidates",
+    "pendingimagecandidates": "pendingImageCandidates",
+    "lowriskimagecandidates": "lowRiskImageCandidates",
+}
 _lock = threading.Lock()
 _process: subprocess.Popen | None = None
 _stop_requested = False
@@ -24,21 +42,26 @@ def run_crawler_batch(
     province: str = "",
     city: str = "",
     only_missing: bool = True,
+    target_image_count: int = 4,
     include_public_sources: bool = True,
     include_pois: bool = True,
     include_paid_providers: bool = False,
     include_osm: bool = True,
+    direct_merge_profiles: bool = False,
     sleep_seconds: float = 0.8,
 ) -> dict:
     limit = max(1, min(int(limit or 10), 100))
+    target_image_count = _normalize_target_image_count(target_image_count)
     with get_db() as db:
-        rows = _select_scenics(db, limit, province, city, only_missing)
+        rows = _select_scenics(db, limit, province, city, only_missing, target_image_count)
         stats = {
             "read": len(rows),
             "searched": 0,
             "profileCandidates": 0,
             "imageCandidates": 0,
             "lowRiskCandidates": 0,
+            "directMergedProfiles": 0,
+            "directMergedPois": 0,
             "failures": [],
             "providerFailures": [],
             "done": len(rows) < limit,
@@ -55,6 +78,10 @@ def run_crawler_batch(
                 stats["failures"].append({"scenic_id": scenic.get("id"), "name": scenic.get("name"), "message": str(exc)[:180]})
             if sleep_seconds:
                 time.sleep(max(0, min(float(sleep_seconds), 3)))
+        if direct_merge_profiles:
+            merged = _merge_profile_candidates_direct_in_db(db, limit=max(limit * 6, 20), province=province, city=city)
+            stats["directMergedProfiles"] = merged["mergedProfiles"]
+            stats["directMergedPois"] = merged["mergedPois"]
     return stats
 
 
@@ -64,10 +91,12 @@ def start_crawler_job(
     province: str = "",
     city: str = "",
     only_missing: bool = True,
+    target_image_count: int = 4,
     include_public_sources: bool = True,
     include_pois: bool = True,
     include_paid_providers: bool = False,
     include_osm: bool = True,
+    direct_merge_profiles: bool = False,
     sleep_seconds: float = 1.5,
 ) -> dict:
     global _stop_requested
@@ -75,16 +104,19 @@ def start_crawler_job(
         if _is_process_running():
             return crawler_status() | {"alreadyRunning": True}
         _stop_requested = False
+        target_image_count = _normalize_target_image_count(target_image_count)
         payload = {
             "batchSize": max(1, min(int(batch_size or 5), 50)),
             "maxTotal": max(1, min(int(max_total or 2528), 50000)),
             "province": province,
             "city": city,
             "onlyMissing": only_missing,
+            "targetImageCount": target_image_count,
             "includePublicSources": include_public_sources,
             "includePois": include_pois,
             "includePaidProviders": include_paid_providers,
             "includeOsm": include_osm,
+            "directMergeProfiles": direct_merge_profiles,
             "sleepSeconds": max(0.5, min(float(sleep_seconds), 5)),
             "startedAt": _now(),
             "read": 0,
@@ -92,10 +124,12 @@ def start_crawler_job(
             "profileCandidates": 0,
             "imageCandidates": 0,
             "lowRiskCandidates": 0,
+            "directMergedProfiles": 0,
+            "directMergedPois": 0,
             "failures": [],
             "providerFailures": [],
             "lastBatch": {},
-            "statsSnapshot": _crawler_stats(),
+            "statsSnapshot": _crawler_stats(target_image_count=target_image_count),
         }
         _write_task("running", payload)
         _start_worker_process(payload)
@@ -134,8 +168,9 @@ def crawler_status() -> dict:
     }
 
 
-def approve_low_risk_candidates(limit: int = 200) -> dict:
+def approve_low_risk_candidates(limit: int = 200, target_image_count: int = 4) -> dict:
     limit = max(1, min(int(limit or 200), 1000))
+    target_image_count = _normalize_target_image_count(target_image_count)
     approved_images = 0
     approved_pois = 0
     skipped = 0
@@ -154,7 +189,7 @@ def approve_low_risk_candidates(limit: int = 200) -> dict:
             ).fetchall()
         )
         for row in image_rows:
-            if _approve_image(db, row):
+            if _approve_image(db, row, target_image_count=target_image_count):
                 approved_images += 1
             else:
                 skipped += 1
@@ -182,6 +217,65 @@ def approve_low_risk_candidates(limit: int = 200) -> dict:
     return {"approvedImages": approved_images, "approvedPois": approved_pois, "skipped": skipped}
 
 
+def merge_profile_candidates_direct(limit: int = 500, province: str = "", city: str = "") -> dict:
+    limit = max(1, min(int(limit or 500), 5000))
+    with get_db() as db:
+        result = _merge_profile_candidates_direct_in_db(db, limit, province, city)
+    _safe_audit("爬虫资料直写", f"直接合并公开来源资料：介绍 {result['mergedProfiles']}，POI {result['mergedPois']}，跳过 {result['skipped']}")
+    return result
+
+
+def backfill_public_source_links(limit: int = 10000, province: str = "", city: str = "") -> dict:
+    limit = max(1, min(int(limit or 10000), 50000))
+    updated = 0
+    skipped = 0
+    with get_db() as db:
+        sql = """
+          SELECT id,name,province,city,latitude,longitude,source_url
+          FROM scenic_spots
+          WHERE (source_url IS NULL OR source_url='' OR source_url LIKE 'local-sql:%')
+        """
+        params = []
+        if province:
+            sql += " AND province=?"
+            params.append(province)
+        if city:
+            sql += " AND city=?"
+            params.append(city)
+        sql += " ORDER BY id ASC LIMIT ?"
+        params.append(limit)
+        rows = rows_to_list(db.execute(sql, params).fetchall())
+        for row in rows:
+            url = amap_marker_url(row.get("name") or "景区", row.get("longitude"), row.get("latitude"))
+            if not url.startswith("http"):
+                skipped += 1
+                continue
+            db.execute("UPDATE scenic_spots SET source_url=?, last_enriched_at=? WHERE id=?", (url, _now(), row["id"]))
+            updated += 1
+    _safe_audit("公开来源补齐", f"补齐公开地图来源链接：更新 {updated}，跳过 {skipped}")
+    return {"updated": updated, "skipped": skipped, "read": updated + skipped}
+
+
+def _merge_profile_candidates_direct_in_db(db, limit: int = 500, province: str = "", city: str = "") -> dict:
+    limit = max(1, min(int(limit or 500), 5000))
+    merged_profiles = 0
+    merged_pois = 0
+    skipped = 0
+    rows = _direct_profile_candidate_rows(db, limit, province, city)
+    for row in rows:
+        if row.get("candidate_type") in {"nearby_food", "nearby_poi", "hiking_poi"}:
+            if row.get("risk_level") == "low" and _approve_poi(db, row):
+                merged_pois += 1
+            else:
+                skipped += 1
+            continue
+        if _merge_text_profile_candidate(db, row):
+            merged_profiles += 1
+        else:
+            skipped += 1
+    return {"mergedProfiles": merged_profiles, "mergedPois": merged_pois, "skipped": skipped, "read": merged_profiles + merged_pois + skipped}
+
+
 def _run_job(payload: dict):
     global _stop_requested
     status = "completed"
@@ -201,10 +295,12 @@ def _run_job(payload: dict):
                 province=message.get("province") or "",
                 city=message.get("city") or "",
                 only_missing=bool(message.get("onlyMissing", True)),
+                target_image_count=int(message.get("targetImageCount") or 4),
                 include_public_sources=bool(message.get("includePublicSources", True)),
                 include_pois=bool(message.get("includePois", True)),
                 include_paid_providers=bool(message.get("includePaidProviders", False)),
                 include_osm=bool(message.get("includeOsm", True)),
+                direct_merge_profiles=bool(message.get("directMergeProfiles", False)),
                 sleep_seconds=float(message.get("sleepSeconds") or 1.5),
             )
             message["read"] = int(message.get("read") or 0) + result.get("read", 0)
@@ -212,10 +308,12 @@ def _run_job(payload: dict):
             message["profileCandidates"] = int(message.get("profileCandidates") or 0) + result.get("profileCandidates", 0)
             message["imageCandidates"] = int(message.get("imageCandidates") or 0) + result.get("imageCandidates", 0)
             message["lowRiskCandidates"] = int(message.get("lowRiskCandidates") or 0) + result.get("lowRiskCandidates", 0)
+            message["directMergedProfiles"] = int(message.get("directMergedProfiles") or 0) + result.get("directMergedProfiles", 0)
+            message["directMergedPois"] = int(message.get("directMergedPois") or 0) + result.get("directMergedPois", 0)
             message["failures"] = (message.get("failures") or [])[-20:] + (result.get("failures") or [])[:20]
             message["providerFailures"] = (message.get("providerFailures") or [])[-20:] + (result.get("providerFailures") or [])[:20]
             message["lastBatch"] = result
-            message["statsSnapshot"] = _crawler_stats()
+            message["statsSnapshot"] = _crawler_stats(target_image_count=int(message.get("targetImageCount") or 4))
             message["cooldownSeconds"] = 0
             message["cooldownReason"] = ""
             message["updatedAt"] = _now()
@@ -232,7 +330,7 @@ def _run_job(payload: dict):
         _write_task(status, message)
 
 
-def _select_scenics(db, limit: int, province: str, city: str, only_missing: bool) -> list[dict]:
+def _select_scenics(db, limit: int, province: str, city: str, only_missing: bool, target_image_count: int = 4) -> list[dict]:
     sql = "SELECT * FROM scenic_spots WHERE 1=1"
     params = []
     if province:
@@ -245,6 +343,12 @@ def _select_scenics(db, limit: int, province: str, city: str, only_missing: bool
         sql += """
           AND (
             cover_image_url IS NULL OR cover_image_url='' OR
+            (
+              SELECT COUNT(*)
+              FROM scenic_images
+              WHERE scenic_images.scenic_id=scenic_spots.id
+                AND status='approved'
+            ) < ? OR
             summary IS NULL OR summary='' OR
             description IS NULL OR description='' OR
             nearby_food IS NULL OR nearby_food='' OR nearby_food='[]' OR
@@ -252,6 +356,7 @@ def _select_scenics(db, limit: int, province: str, city: str, only_missing: bool
             recommended_routes IS NULL OR recommended_routes='' OR recommended_routes='[]'
           )
         """
+        params.append(_normalize_target_image_count(target_image_count))
     sql += " ORDER BY CASE level WHEN '5A' THEN 0 WHEN '4A' THEN 1 ELSE 2 END, id ASC LIMIT ?"
     params.append(limit)
     return rows_to_list(db.execute(sql, params).fetchall())
@@ -455,7 +560,7 @@ def _insert_image_candidate(db, candidate: dict) -> bool:
     return True
 
 
-def _approve_image(db, candidate: dict) -> bool:
+def _approve_image(db, candidate: dict, target_image_count: int = 4) -> bool:
     if not candidate.get("image_url"):
         return False
     if not _approved_image_exists(db, candidate["scenic_id"], candidate["image_url"]):
@@ -483,11 +588,9 @@ def _approve_image(db, candidate: dict) -> bool:
                 int(candidate.get("quality_score") or round(float(candidate.get("confidence") or 0))),
             ),
         )
-        if not cover:
-            db.execute(
-                "UPDATE scenic_spots SET cover_image_url=CASE WHEN cover_image_url IS NULL OR cover_image_url='' THEN ? ELSE cover_image_url END, last_enriched_at=? WHERE id=?",
-                (candidate["image_url"], _now(), candidate["scenic_id"]),
-            )
+        _sync_scenic_gallery(db, candidate["scenic_id"], target_image_count=target_image_count)
+    else:
+        _sync_scenic_gallery(db, candidate["scenic_id"], target_image_count=target_image_count)
     db.execute(
         """
         UPDATE scenic_image_candidates
@@ -523,18 +626,93 @@ def _approve_poi(db, candidate: dict) -> bool:
     return True
 
 
-def _crawler_stats() -> dict:
+def _direct_profile_candidate_rows(db, limit: int, province: str, city: str) -> list[dict]:
+    sql = """
+      SELECT c.*, s.province, s.city
+      FROM scenic_profile_candidates c
+      LEFT JOIN scenic_spots s ON s.id=c.scenic_id
+      WHERE c.status='pending'
+        AND c.candidate_type IN ('summary','summary_full','description','nearby_food','nearby_poi','hiking_poi')
+        AND c.source_type IN ('wikipedia','wikivoyage','openstreetmap_overpass','crawler_poi')
+      """
+    params = []
+    if province:
+        sql += " AND s.province=?"
+        params.append(province)
+    if city:
+        sql += " AND s.city=?"
+        params.append(city)
+    sql += " ORDER BY CASE c.risk_level WHEN 'low' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, c.confidence DESC, c.id ASC LIMIT ?"
+    params.append(limit)
+    return rows_to_list(db.execute(sql, params).fetchall())
+
+
+def _merge_text_profile_candidate(db, candidate: dict) -> bool:
+    if candidate.get("source_type") not in DIRECT_PROFILE_SOURCE_TYPES or candidate.get("candidate_type") not in DIRECT_PROFILE_TYPES:
+        return False
+    content = _clean_profile_content(candidate.get("content") or "")
+    if len(content) < 20:
+        return False
+    scenic = row_to_dict(db.execute("SELECT * FROM scenic_spots WHERE id=?", (candidate["scenic_id"],)).fetchone())
+    if not scenic:
+        return False
+    summary = content[:220]
+    source_url = candidate.get("source_url") or scenic.get("source_url") or ""
+    current_source = scenic.get("source_url") or ""
+    next_source = source_url if not current_source or current_source.startswith("local-sql:") else current_source
+    score_preview = scenic | {"summary": summary, "description": content, "source_url": next_source}
+    db.execute(
+        """
+        UPDATE scenic_spots
+        SET summary=?, description=?, source_url=?, last_enriched_at=?, completeness_score=?
+        WHERE id=?
+        """,
+        (summary, content, next_source, _now(), calculate_completeness_score(score_preview), candidate["scenic_id"]),
+    )
+    db.execute(
+        "UPDATE scenic_profile_candidates SET status='merged', reviewed_at=CURRENT_TIMESTAMP, reviewed_by='auto_crawler' WHERE id=?",
+        (candidate["id"],),
+    )
+    return True
+
+
+def _clean_profile_content(value: str) -> str:
+    return " ".join(str(value or "").replace("\n", " ").split()).strip()
+
+
+def _crawler_stats(target_image_count: int = 4) -> dict:
+    target_image_count = _normalize_target_image_count(target_image_count)
     with get_db() as db:
         scenic = db.execute(
             """
             SELECT
               COUNT(*) AS totalScenic,
               SUM(CASE WHEN cover_image_url IS NULL OR cover_image_url='' THEN 1 ELSE 0 END) AS missingImages,
+              SUM(CASE WHEN (
+                SELECT COUNT(*)
+                FROM scenic_images
+                WHERE scenic_images.scenic_id=scenic_spots.id
+                  AND status='approved'
+              ) < ? THEN 1 ELSE 0 END) AS underTargetImages,
+              SUM(CASE WHEN (
+                SELECT COUNT(*)
+                FROM scenic_images
+                WHERE scenic_images.scenic_id=scenic_spots.id
+                  AND status='approved'
+              ) >= 3 THEN 1 ELSE 0 END) AS spotsWith3Images,
+              SUM(CASE WHEN (
+                SELECT COUNT(*)
+                FROM scenic_images
+                WHERE scenic_images.scenic_id=scenic_spots.id
+                  AND status='approved'
+              ) >= 4 THEN 1 ELSE 0 END) AS spotsWith4Images,
               SUM(CASE WHEN summary IS NULL OR summary='' OR description IS NULL OR description='' THEN 1 ELSE 0 END) AS missingProfiles,
               SUM(CASE WHEN nearby_food IS NULL OR nearby_food='' OR nearby_food='[]' THEN 1 ELSE 0 END) AS missingFood,
               SUM(CASE WHEN nearby_pois IS NULL OR nearby_pois='' OR nearby_pois='[]' THEN 1 ELSE 0 END) AS missingPois
             FROM scenic_spots
             """
+            ,
+            (target_image_count,),
         ).fetchone()
         profiles = db.execute(
             """
@@ -555,12 +733,43 @@ def _crawler_stats() -> dict:
               AND COALESCE(review_status, 'pending')='pending'
             """
         ).fetchone()
-    scenic_stats = dict(scenic or {})
-    profile_stats = dict(profiles or {})
-    image_stats = dict(images or {})
+    scenic_stats = _canonical_metric_keys(dict(scenic or {}))
+    profile_stats = _canonical_metric_keys(dict(profiles or {}))
+    image_stats = _canonical_metric_keys(dict(images or {}))
     low_risk = int(profile_stats.get("lowRiskProfileCandidates") or 0) + int(image_stats.get("lowRiskImageCandidates") or 0)
     pending = int(profile_stats.get("pendingProfileCandidates") or 0) + int(image_stats.get("pendingImageCandidates") or 0)
-    return scenic_stats | profile_stats | image_stats | {"lowRiskCandidates": low_risk, "pendingCandidates": pending}
+    return scenic_stats | profile_stats | image_stats | {"lowRiskCandidates": low_risk, "pendingCandidates": pending, "targetImageCount": target_image_count}
+
+
+def _sync_scenic_gallery(db, scenic_id: int, target_image_count: int = 4):
+    target_image_count = _normalize_target_image_count(target_image_count)
+    images = rows_to_list(
+        db.execute(
+            """
+            SELECT url
+            FROM scenic_images
+            WHERE scenic_id=? AND status='approved' AND url IS NOT NULL AND url<>''
+            ORDER BY is_cover DESC, quality_score DESC, id ASC
+            LIMIT ?
+            """,
+            (scenic_id, target_image_count),
+        ).fetchall()
+    )
+    urls = [item["url"] for item in images if item.get("url")]
+    if not urls:
+        return
+    db.execute(
+        "UPDATE scenic_spots SET cover_image_url=?, gallery=?, last_enriched_at=? WHERE id=?",
+        (urls[0], json.dumps(urls, ensure_ascii=False), _now(), scenic_id),
+    )
+
+
+def _normalize_target_image_count(value) -> int:
+    return max(1, min(int(value or 4), 8))
+
+
+def _canonical_metric_keys(values: dict) -> dict:
+    return {METRIC_KEY_MAP.get(str(key).lower(), key): (0 if value is None else value) for key, value in values.items()}
 
 
 def _write_task(status: str, payload: dict):
@@ -586,7 +795,25 @@ def _start_worker_process(payload: dict):
 
 
 def _is_process_running() -> bool:
-    return bool(_process and _process.poll() is None)
+    if _process and _process.poll() is None:
+        return True
+    return _worker_process_exists()
+
+
+def _worker_process_exists() -> bool:
+    proc_root = Path("/proc")
+    if not proc_root.exists():
+        return False
+    for proc in proc_root.iterdir():
+        if not proc.name.isdigit():
+            continue
+        try:
+            cmd = (proc / "cmdline").read_bytes().replace(b"\x00", b" ").decode("utf-8", "ignore")
+        except OSError:
+            continue
+        if "app.scripts.scenic_crawler_worker" in cmd:
+            return True
+    return False
 
 
 def _parse_payload(value: str) -> dict:

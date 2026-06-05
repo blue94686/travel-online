@@ -1,6 +1,8 @@
 import json
+import re
 import time
 from datetime import datetime
+from urllib.parse import unquote
 
 from app.core.database import get_db, rows_to_list
 from app.services.provider_config_service import get_secret
@@ -12,6 +14,8 @@ GENERIC_DESC_MARKERS = (
     "后续人工资料补全",
     "可用于景区检索、主题推荐、路线规划",
     "根据景点名称、原始分类和坐标信息",
+    "站内根据全国景点源表",
+    "核心特色偏向",
 )
 
 NATURE_TERMS = ("山", "湖", "河", "江", "海", "岛", "湿地", "森林", "峡", "谷", "瀑", "草原", "风景", "自然", "观景")
@@ -20,6 +24,17 @@ PARK_TERMS = ("公园", "广场", "动物园", "植物园", "水族馆", "乐园
 LEISURE_TERMS = ("温泉", "度假", "街区", "农庄", "乡村", "民俗", "商业街")
 HIKING_TERMS = ("山", "峰", "岭", "峡", "谷", "森林", "步道", "栈道", "长城", "草原")
 PHOTO_TERMS = ("山", "湖", "海", "古城", "古镇", "塔", "桥", "花", "瀑", "观景", "世界遗产", "5A", "4A")
+RETRYABLE_DB_ERROR_MARKERS = (
+    "deadlock detected",
+    "could not serialize access",
+    "lock timeout",
+    "database is locked",
+    "database table is locked",
+    "SQLSTATE 40P01",
+    "SQLSTATE 40001",
+)
+TRUSTED_IMAGE_SOURCE_TYPES = {"amap", "wikipedia", "wikivoyage"}
+TEXT_MATCH_REQUIRED_IMAGE_SOURCE_TYPES = {"wikimedia_commons", "wikimedia_commons_geosearch", "openverse"}
 
 
 def enrich_tpt_profiles_batch(limit: int = 5000, offset: int = 0, province: str = "", a_level_only: bool = True, force: bool = False) -> dict:
@@ -161,7 +176,8 @@ def enrich_tpt_media_batch(
                     image_candidates.extend(amap_images)
                     amap_patch = _patch_from_amap_profiles(scenic, amap_profiles)
                     if amap_patch:
-                        db.execute(
+                        _execute_db_write_with_retry(
+                            db,
                             f"UPDATE tpt_jingdian SET {', '.join(f'{key}=?' for key in amap_patch)} WHERE source_id=?",
                             list(amap_patch.values()) + [scenic["source_id"]],
                         )
@@ -174,7 +190,8 @@ def enrich_tpt_media_batch(
                         profile_candidate = public_profiles[0]
                         public_patch = _patch_from_public_profiles(scenic, public_profiles)
                         if public_patch:
-                            db.execute(
+                            _execute_db_write_with_retry(
+                                db,
                                 f"UPDATE tpt_jingdian SET {', '.join(f'{key}=?' for key in public_patch)} WHERE source_id=?",
                                 list(public_patch.values()) + [scenic["source_id"]],
                             )
@@ -184,10 +201,11 @@ def enrich_tpt_media_batch(
                 if profile_candidate and profile_candidate.get("content"):
                     patch.update(_profile_patch_from_candidate(scenic, profile_candidate))
                     stats["withProfiles"] += 1
-                if image_candidates:
-                    patch.update(_image_patch_from_candidates(image_candidates))
+                image_patch = _image_patch_from_candidates(scenic, image_candidates)
+                if image_patch:
+                    patch.update(image_patch)
                     stats["withImages"] += 1
-                elif _has_rate_limited_provider(provider_failures if include_public_sources else []):
+                elif _all_public_image_sources_rate_limited(provider_failures if include_public_sources else []):
                     patch["image_status"] = "rate_limited"
                     stats["rateLimited"] += 1
                 elif _has_provider_failures(provider_failures if include_public_sources else []):
@@ -196,7 +214,8 @@ def enrich_tpt_media_batch(
                 else:
                     patch["image_status"] = "not_found"
                     stats["notFound"] += 1
-                db.execute(
+                _execute_db_write_with_retry(
+                    db,
                     f"UPDATE tpt_jingdian SET {', '.join(f'{key}=?' for key in patch)} WHERE source_id=?",
                     list(patch.values()) + [scenic["source_id"]],
                 )
@@ -208,7 +227,8 @@ def enrich_tpt_media_batch(
                 stats["failures"].append({"source_id": scenic["source_id"], "name": scenic["name"], "message": message})
                 if hasattr(db, "rollback"):
                     db.rollback()
-                db.execute(
+                _execute_db_write_with_retry(
+                    db,
                     "UPDATE tpt_jingdian SET image_status=?, media_checked_at=? WHERE source_id=?",
                     (status, _now(), scenic["source_id"]),
                 )
@@ -268,6 +288,75 @@ def enrich_tpt_media_all(
     return total | {"batchSize": batch_size, "maxTotal": max_total, "province": province, "aLevelOnly": a_level_only, "useAmap": use_amap, "includeOsm": include_osm, "batches": batches}
 
 
+def enrich_tpt_detail_if_missing(db, scenic: dict) -> dict:
+    if not scenic:
+        return scenic
+    ensure_tpt_jingdian_schema(db)
+    needs_profile = _needs_public_profile(scenic)
+    needs_image = not (scenic.get("cover_image_url") or "").strip()
+    if not needs_profile and not needs_image:
+        return scenic
+
+    try:
+        public_profiles, public_images, provider_failures = public_source_bundle_detailed(
+            _as_public_scenic(scenic),
+            include_osm=False,
+            include_wikivoyage=False,
+            include_commons=False,
+            include_openverse=False,
+        )
+    except Exception:
+        return scenic
+
+    patch = {"media_checked_at": _now()}
+    if needs_profile and public_profiles:
+        profile_candidate = public_profiles[0]
+        if profile_candidate.get("content"):
+            patch.update(_profile_patch_from_candidate(scenic, profile_candidate))
+        patch.update(_patch_from_public_profiles(scenic, public_profiles))
+    if needs_image:
+        image_patch = _image_patch_from_candidates(scenic, public_images)
+        if image_patch:
+            patch.update(image_patch)
+        elif _all_public_image_sources_rate_limited(provider_failures):
+            patch["image_status"] = "rate_limited"
+        elif _has_provider_failures(provider_failures):
+            patch["image_status"] = "source_unavailable"
+
+    if set(patch) == {"media_checked_at"}:
+        return scenic
+
+    _execute_db_write_with_retry(
+        db,
+        f"UPDATE tpt_jingdian SET {', '.join(f'{key}=?' for key in patch)} WHERE source_id=?",
+        list(patch.values()) + [scenic["source_id"]],
+    )
+    if hasattr(db, "commit"):
+        db.commit()
+    row = db.execute("SELECT * FROM tpt_jingdian WHERE source_id=?", (scenic["source_id"],)).fetchone()
+    return dict(row) if row else {**scenic, **patch}
+
+
+def _execute_db_write_with_retry(db, sql: str, params, attempts: int = 3):
+    last_error = None
+    for attempt in range(max(1, attempts)):
+        try:
+            return db.execute(sql, params)
+        except Exception as exc:
+            last_error = exc
+            if attempt >= attempts - 1 or not _is_retryable_db_error(exc):
+                raise
+            if hasattr(db, "rollback"):
+                db.rollback()
+            time.sleep(0.25 * (attempt + 1))
+    raise last_error
+
+
+def _is_retryable_db_error(exc: Exception) -> bool:
+    message = str(exc)
+    return any(marker in message for marker in RETRYABLE_DB_ERROR_MARKERS)
+
+
 def tpt_enrichment_stats() -> dict:
     with get_db() as db:
         ensure_tpt_jingdian_schema(db)
@@ -306,9 +395,19 @@ def _tpt_where(province: str = "", a_level_only: bool = True):
     return where, params
 
 
+def _needs_public_profile(scenic: dict) -> bool:
+    return (
+        not scenic.get("summary")
+        or not scenic.get("description")
+        or scenic.get("profile_source") in {"", "local_rule_v2"}
+        or _is_generic_description(scenic.get("description") or "")
+    )
+
+
 def _build_tpt_profile_patch(scenic: dict, force: bool = False) -> dict:
     current_description = scenic.get("description") or ""
     current_summary = scenic.get("summary") or ""
+    has_public_profile = scenic.get("profile_source") in {"维基百科", "维基导游", "Wikimedia Commons", "wikipedia", "wikivoyage"}
     if not force and current_summary and current_description and not _is_generic_description(current_description):
         return {}
 
@@ -336,18 +435,28 @@ def _build_tpt_profile_patch(scenic: dict, force: bool = False) -> dict:
         "出发前请以景区官方公告或现场公示核对开放时间、门票预约、临时闭园、天气和交通管制信息。",
     ]
     patch = {
-        "summary": summary,
-        "description": "".join(description_parts),
         "tags": ";".join(tags),
         "best_season": best_season,
         "audience": experience,
         "recommended_duration": duration,
         "route_idea": f"{name}主入口 -> 核心景观区 -> 周边服务点 -> 同城相邻景点联游",
         "quality_score": max(int(scenic.get("quality_score") or 0), 72 if level in ("4A", "5A") else 62),
-        "profile_source": "local_rule_v2",
-        "profile_source_url": scenic.get("level_source_url") or "",
-        "profile_updated_at": _now(),
     }
+    if not has_public_profile or _is_generic_description(current_description):
+        patch.update(
+            {
+                "summary": summary,
+                "description": "".join(description_parts),
+            }
+        )
+    if not has_public_profile:
+        patch.update(
+            {
+                "profile_source": "local_rule_v2",
+                "profile_source_url": scenic.get("level_source_url") or "",
+                "profile_updated_at": _now(),
+            }
+        )
     return patch
 
 
@@ -355,12 +464,15 @@ def _profile_patch_from_candidate(scenic: dict, candidate: dict) -> dict:
     content = (candidate.get("content") or "").strip()
     if len(content) < 24:
         return {}
+    if not _profile_candidate_matches_scenic(scenic, candidate):
+        return {}
+    has_local_rule_profile = scenic.get("profile_source") in {"", "local_rule_v2"}
     patch = {
         "profile_source": candidate.get("source_name") or candidate.get("source_type") or "public_source",
         "profile_source_url": candidate.get("source_url") or "",
         "profile_updated_at": _now(),
     }
-    if _is_generic_description(scenic.get("description") or "") or len(content) > len(scenic.get("summary") or ""):
+    if has_local_rule_profile or _is_generic_description(scenic.get("description") or "") or len(content) > len(scenic.get("summary") or ""):
         patch["summary"] = content[:220]
         patch["description"] = content
     return patch
@@ -442,11 +554,13 @@ def _patch_from_public_profiles(scenic: dict, candidates: list[dict]) -> dict:
     return patch
 
 
-def _image_patch_from_candidates(candidates: list[dict]) -> dict:
-    clean = [item for item in candidates if item.get("image_url")]
+def _image_patch_from_candidates(scenic: dict, candidates: list[dict]) -> dict:
+    clean = _trusted_image_candidates(scenic, candidates)
+    if not clean:
+        return {}
     cover = clean[0]
     gallery = []
-    for item in clean[:6]:
+    for item in _gallery_candidates_for_cover(cover, clean)[:6]:
         if item["image_url"] not in gallery:
             gallery.append(item["image_url"])
     return {
@@ -458,6 +572,123 @@ def _image_patch_from_candidates(candidates: list[dict]) -> dict:
         "image_attribution": cover.get("attribution") or "",
         "image_status": "approved_external_url",
     }
+
+
+def _gallery_candidates_for_cover(cover: dict, candidates: list[dict]) -> list[dict]:
+    cover_source_type = (cover.get("source_type") or cover.get("provider") or "").strip().lower()
+    if cover_source_type in TRUSTED_IMAGE_SOURCE_TYPES:
+        return [
+            item for item in candidates
+            if (item.get("source_type") or item.get("provider") or "").strip().lower() == cover_source_type
+            or "upload.wikimedia.org/" in (item.get("image_url") or "")
+        ]
+    return candidates
+
+
+def _trusted_image_candidates(scenic: dict, candidates: list[dict]) -> list[dict]:
+    trusted = []
+    seen = set()
+    for item in candidates or []:
+        image_url = item.get("image_url")
+        if not image_url or image_url in seen:
+            continue
+        source_type = (item.get("source_type") or item.get("provider") or "").strip().lower()
+        if source_type in TRUSTED_IMAGE_SOURCE_TYPES or _image_candidate_matches_scenic(scenic, item):
+            trusted.append(item)
+            seen.add(image_url)
+    return trusted
+
+
+def _image_candidate_matches_scenic(scenic: dict, candidate: dict) -> bool:
+    source_type = (candidate.get("source_type") or candidate.get("provider") or "").strip().lower()
+    if source_type and source_type not in TEXT_MATCH_REQUIRED_IMAGE_SOURCE_TYPES:
+        return source_type in TRUSTED_IMAGE_SOURCE_TYPES
+    evidence = _image_candidate_evidence(candidate)
+    return any(variant and variant in evidence for variant in _scenic_name_variants(scenic))
+
+
+def _profile_candidate_matches_scenic(scenic: dict, candidate: dict) -> bool:
+    evidence = _profile_candidate_evidence(candidate)
+    variants = _scenic_name_variants(scenic)
+    if not variants:
+        return False
+    matched = [variant for variant in variants if variant and variant in evidence]
+    if not matched:
+        return False
+    if any(len(variant) >= 4 for variant in matched):
+        return True
+    region_tokens = _region_match_tokens(scenic)
+    return bool(region_tokens and any(token in evidence for token in region_tokens))
+
+
+def _image_candidate_evidence(candidate: dict) -> str:
+    raw_payload = candidate.get("raw_payload_json") or ""
+    if isinstance(raw_payload, (dict, list)):
+        raw_payload = json.dumps(raw_payload, ensure_ascii=False)
+    text = " ".join(
+        str(candidate.get(key) or "")
+        for key in ("title", "source_url", "image_url", "thumbnail_url", "attribution")
+    )
+    text = f"{text} {raw_payload}"
+    return unquote(text).replace("_", "").replace(" ", "").lower()
+
+
+def _profile_candidate_evidence(candidate: dict) -> str:
+    raw_payload = candidate.get("raw_payload_json") or candidate.get("raw") or ""
+    if isinstance(raw_payload, (dict, list)):
+        raw_payload = json.dumps(raw_payload, ensure_ascii=False)
+    text = " ".join(str(candidate.get(key) or "") for key in ("content", "source_url"))
+    return _compact_match_text(unquote(f"{text} {raw_payload}"))
+
+
+def _region_match_tokens(scenic: dict) -> list[str]:
+    tokens = []
+    for key in ("province", "city", "district", "address", "web_address"):
+        value = _compact_match_text(scenic.get(key) or "")
+        if len(value) >= 2 and value not in tokens:
+            tokens.append(value)
+        short = re.sub(r"(省|市|区|县|自治州|自治县|地区|特别行政区)$", "", value)
+        if len(short) >= 2 and short not in tokens:
+            tokens.append(short)
+    return tokens
+
+
+def _scenic_name_variants(scenic: dict) -> list[str]:
+    name = str(scenic.get("name") or "").strip()
+    if not name:
+        return []
+    variants = []
+    for value in (name, re.sub(r"[（(].*?[）)]", "", name)):
+        cleaned = _compact_match_text(value)
+        if cleaned and cleaned not in variants:
+            variants.append(cleaned)
+        without_suffix = _strip_scenic_suffix(cleaned)
+        if len(without_suffix) >= 3 and without_suffix not in variants:
+            variants.append(without_suffix)
+    return variants
+
+
+def _compact_match_text(value: str) -> str:
+    return re.sub(r"[\s·・,，.。:：;；'\"“”‘’\-—_/\\]+", "", str(value or "")).lower()
+
+
+def _strip_scenic_suffix(value: str) -> str:
+    suffixes = (
+        "国家级风景名胜区",
+        "风景名胜区",
+        "文化生态旅游区",
+        "旅游度假区",
+        "旅游景区",
+        "风景区",
+        "景区",
+        "旅游区",
+        "度假区",
+        "公园",
+    )
+    for suffix in suffixes:
+        if value.endswith(suffix) and len(value) > len(suffix):
+            return value[: -len(suffix)]
+    return value
 
 
 def _as_public_scenic(scenic: dict) -> dict:
@@ -567,6 +798,12 @@ def _has_any_text(text: str, terms: tuple[str, ...]) -> bool:
 
 def _has_rate_limited_provider(failures: list[dict]) -> bool:
     return any((item.get("status") == "rate_limited") for item in failures or [])
+
+
+def _all_public_image_sources_rate_limited(failures: list[dict]) -> bool:
+    rate_limited = {item.get("provider") for item in failures or [] if item.get("status") == "rate_limited"}
+    image_sources = {"wikipedia", "wikivoyage", "wikimedia_commons", "openverse"}
+    return image_sources.issubset(rate_limited)
 
 
 def _has_provider_failures(failures: list[dict]) -> bool:

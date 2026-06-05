@@ -6,6 +6,7 @@ from app.core.region_utils import is_fallback_area_label, label_area, normalize_
 from app.services.amap_service import amap_marker_url, search_amap_pois
 from app.services.theme_catalog import THEME_BY_NAME, THEME_TERMS
 from app.services.tpt_jingdian_importer import search_tpt_jingdian
+from app.services.tpt_profile_enrichment_service import enrich_tpt_detail_if_missing
 
 
 def _theme_terms(theme):
@@ -99,33 +100,22 @@ def list_scenic(
     limit = max(1, min(int(limit or 80), 200))
     offset = max(0, int(offset or 0))
     with get_db() as db:
-        columns = {row["name"] for row in db.execute("PRAGMA table_info(scenic_spots)").fetchall()}
-        filter_sql, params, theme_terms = _scenic_filter_sql(
-            columns, q=q, province=province, city=city, district=district, theme=theme
-        )
-        scenic_total = db.execute("SELECT COUNT(*) AS c" + filter_sql, params).fetchone()["c"]
-        items = []
-        scenic_limit = max(0, min(limit, scenic_total - offset)) if offset < scenic_total else 0
-        if scenic_limit:
-            sql = "SELECT *" + filter_sql + " ORDER BY rating DESC, id ASC LIMIT ? OFFSET ?"
-            items = rows_to_list(db.execute(sql, [*params, scenic_limit, offset]).fetchall())
         keyword = (q or "").strip()
+        theme_terms = _theme_terms(theme)
         category = " ".join(theme_terms)
         areaid = resolve_areaid(province=province, city=city, district=district)
-        remaining = max(0, limit - len(items))
-        if remaining:
-            tpt_offset = 0 if offset < scenic_total else offset - scenic_total
-            tpt_result = search_tpt_jingdian(
-                db,
-                keyword=keyword,
-                areaid=areaid,
-                province=province,
-                city=city,
-                district=district,
-                category=category,
-                limit=remaining,
-            )
-            items.extend(_normalize_tpt_item(row) for row in tpt_result["items"])
+        tpt_result = search_tpt_jingdian(
+            db,
+            keyword=keyword,
+            areaid=areaid,
+            province=province,
+            city=city,
+            district=district,
+            category=category,
+            limit=limit,
+            offset=offset,
+        )
+        items = [_normalize_tpt_item(row) for row in tpt_result["items"]]
     remaining = max(0, limit - len(items))
     if remaining and include_amap and (q or "").strip():
         amap_result = search_amap_pois(q, city=city or province or "", limit=min(10, remaining))
@@ -138,14 +128,9 @@ def count_scenic(q=None, province=None, city=None, district=None, theme=None):
     city = normalize_region_name(city)
     district = normalize_region_name(district)
     with get_db() as db:
-        columns = {row["name"] for row in db.execute("PRAGMA table_info(scenic_spots)").fetchall()}
-        filter_sql, params, _ = _scenic_filter_sql(
-            columns, q=q, province=province, city=city, district=district, theme=theme
-        )
-        scenic_count = db.execute("SELECT COUNT(*) AS c" + filter_sql, params).fetchone()["c"]
         terms = _theme_terms(theme)
         areaid = resolve_areaid(province=province, city=city, district=district)
-        tpt_count = search_tpt_jingdian(
+        return search_tpt_jingdian(
             db,
             keyword=(q or "").strip(),
             areaid=areaid,
@@ -155,7 +140,6 @@ def count_scenic(q=None, province=None, city=None, district=None, theme=None):
             category=" ".join(terms),
             limit=1,
         )["total"]
-        return scenic_count + tpt_count
 
 
 def _count_tpt_theme_rows(db, terms):
@@ -378,7 +362,10 @@ def get_scenic_source_detail(public_id):
         return None
     with get_db() as db:
         row = db.execute("SELECT * FROM tpt_jingdian WHERE source_id = ?", (source_id,)).fetchone()
-    return _normalize_tpt_item(dict(row)) if row else None
+        if not row:
+            return None
+        source_row = enrich_tpt_detail_if_missing(db, dict(row))
+    return _normalize_tpt_item(source_row)
 
 
 def get_scenic(scenic_id):

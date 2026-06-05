@@ -19,9 +19,12 @@ import {
 } from 'lucide-react'
 import {
   approveLowRiskCrawlerCandidates,
+  backfillPoiIndex,
   getCrawlerEnrichmentStatus,
+  getPoiIndexStats,
   getWebEnrichmentCandidates,
   getWebEnrichmentOverview,
+  mergeCrawlerProfilesDirect,
   runCrawlerEnrichmentBatch,
   startCrawlerEnrichmentJob,
   stopCrawlerEnrichmentJob,
@@ -29,9 +32,12 @@ import {
 
 const metricDefs = [
   ['missingImages', '缺图景区', Image],
+  ['underTargetImages', '图集不足 4 张', Image],
+  ['spotsWith4Images', '已满 4 张', CheckCircle2],
   ['missingProfiles', '缺介绍', Sparkles],
   ['missingFood', '缺美食 POI', Utensils],
   ['missingPois', '缺周边 POI', MapPinned],
+  ['fullPoiIndex', '完整 POI 索引', MapPinned],
   ['pendingCandidates', '待审核候选', Filter],
   ['lowRiskCandidates', '低风险可通过', ShieldCheck],
 ]
@@ -64,16 +70,19 @@ function buildPolicy(policy) {
     province: policy.province,
     city: policy.city,
     only_missing: true,
+    target_image_count: policy.targetImageCount,
     include_public_sources: policy.includePublicSources,
     include_pois: policy.includePois,
     include_paid_providers: policy.include_paid_providers,
     include_osm: policy.includeOsm,
+    direct_merge_profiles: policy.directMergeProfiles,
     sleep_seconds: policy.sleepSeconds,
   }
 }
 
 export default function AdminWebEnrichmentPage() {
   const [overview, setOverview] = useState(null)
+  const [poiStats, setPoiStats] = useState(null)
   const [crawler, setCrawler] = useState(null)
   const [candidates, setCandidates] = useState([])
   const [activeTab, setActiveTab] = useState('all')
@@ -85,10 +94,12 @@ export default function AdminWebEnrichmentPage() {
     city: '',
     batchSize: 5,
     maxTotal: 2528,
+    targetImageCount: 4,
     sleepSeconds: 1.5,
     includePublicSources: true,
     includePois: true,
     includeOsm: true,
+    directMergeProfiles: true,
     include_paid_providers: false,
   })
 
@@ -98,14 +109,16 @@ export default function AdminWebEnrichmentPage() {
   }, [activeTab])
 
   const refresh = async () => {
-    const [nextOverview, nextCrawler, nextCandidates] = await Promise.all([
+    const [nextOverview, nextCrawler, nextCandidates, nextPoiStats] = await Promise.all([
       getWebEnrichmentOverview(),
       getCrawlerEnrichmentStatus(),
       getWebEnrichmentCandidates(candidateQuery),
+      getPoiIndexStats(),
     ])
     setOverview(nextOverview || null)
     setCrawler(nextCrawler || null)
     setCandidates(nextCandidates?.items || [])
+    setPoiStats(nextPoiStats || null)
   }
 
   useEffect(() => {
@@ -139,8 +152,16 @@ export default function AdminWebEnrichmentPage() {
         setNotice('已请求停止任务，当前批次完成后会停止。')
       }
       if (action === 'approve') {
-        const result = await approveLowRiskCrawlerCandidates({ limit: 200 })
+        const result = await approveLowRiskCrawlerCandidates({ limit: 200, target_image_count: policy.targetImageCount })
         setNotice(`批量通过低风险完成：图片 ${result?.approvedImages || 0}，POI ${result?.approvedPois || 0}，跳过 ${result?.skipped || 0}。`)
+      }
+      if (action === 'mergeProfiles') {
+        const result = await mergeCrawlerProfilesDirect({ limit: 500, province: policy.province, city: policy.city })
+        setNotice(`公开来源资料已直接合并：介绍 ${result?.mergedProfiles || 0}，POI ${result?.mergedPois || 0}，跳过 ${result?.skipped || 0}。`)
+      }
+      if (action === 'poiIndex') {
+        const result = await backfillPoiIndex({ limit: policy.maxTotal, province: policy.province, city: policy.city })
+        setNotice(`主题 POI 索引已补全：景区 ${result?.updated || 0}，POI ${result?.poiItems || 0}，跳过 ${result?.skipped || 0}。`)
       }
       await refresh()
     } finally {
@@ -169,6 +190,8 @@ export default function AdminWebEnrichmentPage() {
           <button className="ghost-btn" type="button" disabled={loading} onClick={() => runAction('refresh')}><RefreshCw size={16} /> 刷新状态</button>
           <button className="ghost-btn" type="button" disabled={loading} onClick={() => runAction('trial')}><PlayCircle size={16} /> 试跑一批</button>
           <button className="primary-btn" type="button" disabled={loading} onClick={() => runAction('start')}><PlayCircle size={16} /> 启动后台更新</button>
+          <button className="ghost-btn" type="button" disabled={loading} onClick={() => runAction('mergeProfiles')}><Sparkles size={16} /> 直接合并资料</button>
+          <button className="ghost-btn" type="button" disabled={loading} onClick={() => runAction('poiIndex')}><MapPinned size={16} /> 补全主题 POI</button>
           <button className="ghost-btn danger" type="button" disabled={loading} onClick={() => runAction('stop')}><PauseCircle size={16} /> 停止任务</button>
         </div>
       </section>
@@ -196,6 +219,12 @@ export default function AdminWebEnrichmentPage() {
           <label>最大处理
             <input type="number" min="1" max="50000" value={policy.maxTotal} onChange={event => updatePolicy('maxTotal', Number(event.target.value || 1))} />
           </label>
+          <label>目标图集
+            <select value={policy.targetImageCount} onChange={event => updatePolicy('targetImageCount', Number(event.target.value || 4))}>
+              <option value={3}>每景区 3 张</option>
+              <option value={4}>每景区 4 张</option>
+            </select>
+          </label>
           <label>间隔秒数
             <input type="number" min="0.5" max="5" step="0.5" value={policy.sleepSeconds} onChange={event => updatePolicy('sleepSeconds', Number(event.target.value || 0.5))} />
           </label>
@@ -203,6 +232,7 @@ export default function AdminWebEnrichmentPage() {
         <div className="web-source-toggles">
           {[
             ['includePublicSources', '公开来源', 'Wikipedia / Wikimedia / Wikivoyage'],
+            ['directMergeProfiles', '直接合并资料', '公开来源介绍与低风险 POI 直接写回'],
             ['includeOsm', 'OSM', '开放地图与徒步线索'],
             ['includePois', '周边 POI', '美食、周边、徒步候选'],
             ['include_paid_providers', '付费来源', '默认关闭，需管理员主动启用'],
@@ -219,7 +249,7 @@ export default function AdminWebEnrichmentPage() {
         {metricDefs.map(([key, label, Icon]) => (
           <article key={key}>
             <span><Icon size={19} /></span>
-            <div><strong>{valueOrDash(overview?.[key])}</strong><em>{label}</em></div>
+            <div><strong>{valueOrDash(overview?.[key] ?? poiStats?.[key])}</strong><em>{label}</em></div>
           </article>
         ))}
       </section>

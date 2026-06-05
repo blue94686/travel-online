@@ -13,6 +13,7 @@ from app.services.scenic_profile_batch_enrichment_service import (
     enrich_profile_batch,
     profile_completion_stats,
 )
+from app.services.scenic_poi_index_service import backfill_theme_poi_index, poi_index_stats
 from app.services.tpt_profile_enrichment_service import (
     enrich_tpt_media_all,
     enrich_tpt_media_batch,
@@ -28,7 +29,9 @@ from app.services.scenic_external_enrichment_service import (
 )
 from app.services.scenic_crawler_enrichment_service import (
     approve_low_risk_candidates,
+    backfill_public_source_links,
     crawler_status,
+    merge_profile_candidates_direct,
     run_crawler_batch,
     start_crawler_job,
     stop_crawler_job,
@@ -95,6 +98,21 @@ def profile_overview_endpoint():
 @router.get("/admin/enrichment/profile/completion-stats")
 def profile_completion_stats_endpoint():
     return ok(profile_completion_stats())
+
+
+@router.get("/admin/enrichment/poi-index/stats")
+def poi_index_stats_endpoint():
+    return ok(poi_index_stats())
+
+
+@router.post("/admin/enrichment/poi-index/backfill")
+def poi_index_backfill_endpoint(
+    limit: int = Query(1000, ge=1, le=50000),
+    province: str | None = None,
+    city: str | None = None,
+    force: bool = False,
+):
+    return ok(backfill_theme_poi_index(limit=limit, province=province or "", city=city or "", force=force), "主题 POI 索引已补全")
 
 
 @router.get("/admin/enrichment/tpt/stats")
@@ -246,10 +264,12 @@ def crawler_batch(
     province: str | None = None,
     city: str | None = None,
     only_missing: bool = True,
+    target_image_count: int = Query(4, ge=1, le=8),
     include_public_sources: bool = True,
     include_pois: bool = True,
     include_paid_providers: bool = False,
     include_osm: bool = True,
+    direct_merge_profiles: bool = False,
     sleep_seconds: float = Query(0.8, ge=0, le=3),
 ):
     return ok(
@@ -258,10 +278,12 @@ def crawler_batch(
             province=province or "",
             city=city or "",
             only_missing=only_missing,
+            target_image_count=target_image_count,
             include_public_sources=include_public_sources,
             include_pois=include_pois,
             include_paid_providers=include_paid_providers,
             include_osm=include_osm,
+            direct_merge_profiles=direct_merge_profiles,
             sleep_seconds=sleep_seconds,
         ),
         "爬虫补全批次已完成",
@@ -275,10 +297,12 @@ def crawler_job_start(
     province: str | None = None,
     city: str | None = None,
     only_missing: bool = True,
+    target_image_count: int = Query(4, ge=1, le=8),
     include_public_sources: bool = True,
     include_pois: bool = True,
     include_paid_providers: bool = False,
     include_osm: bool = True,
+    direct_merge_profiles: bool = False,
     sleep_seconds: float = Query(1.5, ge=0.5, le=5),
 ):
     return ok(
@@ -288,10 +312,12 @@ def crawler_job_start(
             province=province or "",
             city=city or "",
             only_missing=only_missing,
+            target_image_count=target_image_count,
             include_public_sources=include_public_sources,
             include_pois=include_pois,
             include_paid_providers=include_paid_providers,
             include_osm=include_osm,
+            direct_merge_profiles=direct_merge_profiles,
             sleep_seconds=sleep_seconds,
         ),
         "爬虫补全任务已启动",
@@ -309,8 +335,26 @@ def crawler_job_stop():
 
 
 @router.post("/admin/enrichment/crawler/approve-low-risk")
-def crawler_approve_low_risk(limit: int = Query(200, ge=1, le=1000)):
-    return ok(approve_low_risk_candidates(limit=limit), "低风险图片和 POI 候选已批量通过")
+def crawler_approve_low_risk(limit: int = Query(200, ge=1, le=1000), target_image_count: int = Query(4, ge=1, le=8)):
+    return ok(approve_low_risk_candidates(limit=limit, target_image_count=target_image_count), "低风险图片和 POI 候选已批量通过")
+
+
+@router.post("/admin/enrichment/crawler/merge-profiles-direct")
+def crawler_merge_profiles_direct(
+    limit: int = Query(500, ge=1, le=5000),
+    province: str | None = None,
+    city: str | None = None,
+):
+    return ok(merge_profile_candidates_direct(limit=limit, province=province or "", city=city or ""), "公开来源景区资料已直接合并")
+
+
+@router.post("/admin/enrichment/crawler/backfill-public-sources")
+def crawler_backfill_public_sources(
+    limit: int = Query(10000, ge=1, le=50000),
+    province: str | None = None,
+    city: str | None = None,
+):
+    return ok(backfill_public_source_links(limit=limit, province=province or "", city=city or ""), "公开来源链接已补齐")
 
 
 @router.get("/admin/enrichment/profile/external-readiness")

@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useLocation } from 'react-router-dom'
 import { Calendar, Camera, Clock, Heart, MapPin, Navigation, Route, Share2, Star, Upload, Info, BookOpen, Map, MessageCircle, ChevronRight, Phone, Globe, DollarSign, AlertCircle, Users, Eye, Accessibility, BarChart3, ShieldCheck } from 'lucide-react'
 import { getScenicNearby, getScenicProfile } from '../api/scenic.js'
 import { getScenicComments, postComment, saveFavorite, saveUserRoute, uploadImage } from '../api/user.js'
-import { getScenicImageOrPlaceholder, getScenicPlaceholder } from '../api/fallback.js'
+import { getScenicGalleryImages, getScenicImageOrPlaceholder, getScenicPlaceholder } from '../api/fallback.js'
 import { useAuth } from '../hooks/useAuth.jsx'
 import { useToast } from '../hooks/useToast.jsx'
 import MapPanel from '../components/common/MapPanel.jsx'
@@ -14,6 +14,7 @@ import EmptyState from '../components/common/EmptyState.jsx'
 import RouteCard from '../components/common/RouteCard.jsx'
 import SectionHeader from '../components/common/SectionHeader.jsx'
 import { SkeletonDetail } from '../components/common/Skeleton.jsx'
+import { getScenicSourceLinks } from '../utils/scenicSourceLinks.js'
 
 export default function ScenicDetailPage() {
   const { id } = useParams()
@@ -31,6 +32,7 @@ export default function ScenicDetailPage() {
   const [activeTab, setActiveTab] = useState('intro')
   const numericScenicId = Number(id)
   const isFormalScenic = Number.isInteger(numericScenicId) && String(numericScenicId) === String(id)
+  const sourceLinks = getScenicSourceLinks(item)
 
   useEffect(() => {
     getScenicProfile(id).then(data => {
@@ -47,10 +49,9 @@ export default function ScenicDetailPage() {
   }, [id])
 
   const gallery = useMemo(() => {
-    const images = [item?.cover_image_url, ...(item?.gallery || [])].filter(i => i && i.startsWith('http'))
-    if (images.length > 0) return Array.from(new Set(images)).slice(0, 5)
-    return Array.from({ length: 3 }, () => getScenicPlaceholder(item))
+    return getScenicGalleryImages(item).slice(0, 5)
   }, [item])
+  const hasRealGallery = gallery.some(src => src?.startsWith('http'))
 
   const submitComment = async (event) => {
     event.preventDefault()
@@ -149,13 +150,13 @@ export default function ScenicDetailPage() {
           <div style={{ height: 400, borderRadius: 16, overflow: 'hidden', marginBottom: 12 }}>
             <img src={mainImage} onError={setFallbackImage} loading="eager" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="" />
           </div>
-          <div style={{ display: 'flex', gap: 12, overflowX: 'auto' }}>
+          {hasRealGallery && gallery.length > 1 && <div style={{ display: 'flex', gap: 12, overflowX: 'auto' }}>
             {gallery.map((src, i) => (
               <button key={i} aria-label={`预览第 ${i + 1} 张景区图片`} aria-pressed={mainImage === src} onClick={() => setMainImage(src)} style={{ flex: '0 0 100px', height: 70, borderRadius: 8, overflow: 'hidden', border: mainImage === src ? '2px solid var(--color-primary)' : 'none', padding: 0 }}>
                 <img src={src} onError={setFallbackImage} loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="" />
               </button>
             ))}
-          </div>
+          </div>}
           {mediaByUrl[mainImage]?.source && (
             <div style={{ marginTop: 10, fontSize: 12, color: 'var(--color-muted)', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <span>图片来源：{mediaByUrl[mainImage].source}</span>
@@ -297,7 +298,10 @@ export default function ScenicDetailPage() {
               <section className="panel" style={{ padding: 32 }}>
                 <SectionHeader title="用户实拍" />
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
-                  {gallery.slice(0, 8).map((src, i) => <img key={i} src={src} onError={setFallbackImage} loading="lazy" decoding="async" style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 8 }} alt="" />)}
+                  {hasRealGallery
+                    ? gallery.slice(0, 8).map((src, i) => <img key={i} src={src} onError={setFallbackImage} loading="lazy" decoding="async" style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 8 }} alt="" />)
+                    : <EmptyState title="图片待补全" text="后台会继续从公开来源补充真实图片，当前不展示重复占位图。" />
+                  }
                 </div>
                 <p style={{ margin: '0 0 16px', color: 'var(--color-muted)', fontSize: 13 }}>
                   图片优先展示后台审核通过的外链/CDN 资源，本地只保存 URL、来源、授权和质量分，不存储原图文件。
@@ -320,7 +324,17 @@ export default function ScenicDetailPage() {
                 <div style={{ display: 'grid', gap: 20 }}>
                   <div style={{ display: 'flex', gap: 12 }}><Phone size={18} style={{ color: 'var(--color-primary)' }}/> <div><strong>咨询电话</strong><p style={{ margin: '4px 0 0', color: 'var(--color-muted)' }}>{item.phone || '暂无'}</p></div></div>
                   <div style={{ display: 'flex', gap: 12 }}><MapPin size={18} style={{ color: 'var(--color-primary)' }}/> <div><strong>详细地址</strong><p style={{ margin: '4px 0 0', color: 'var(--color-muted)' }}>{item.address}</p></div></div>
-                  {item.official_website && <div style={{ display: 'flex', gap: 12 }}><Globe size={18} style={{ color: 'var(--color-primary)' }}/> <div><strong>官方网站</strong><p style={{ margin: '4px 0 0' }}><a href={item.official_website} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-primary)' }}>点击访问官方平台</a></p></div></div>}
+                  {sourceLinks.map(link => (
+                    <div key={`${link.label}-${link.url}`} style={{ display: 'flex', gap: 12 }}>
+                      <Globe size={18} style={{ color: 'var(--color-primary)', flexShrink: 0 }}/>
+                      <div>
+                        <strong>{link.label}</strong>
+                        <p style={{ margin: '4px 0 0' }}>
+                          <a href={link.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-primary)' }}>{link.text}</a>
+                        </p>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </section>
 

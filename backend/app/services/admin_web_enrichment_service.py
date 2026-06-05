@@ -6,6 +6,23 @@ from app.core.database import get_db, row_to_dict, rows_to_list
 CRAWLER_JOB_NAME = "scenic_crawler_enrichment"
 TPT_MEDIA_JOB_NAME = "tpt_media_full"
 LEGACY_TPT_MEDIA_JOB_NAME = "tpt_media_job"
+METRIC_KEY_MAP = {
+    "totalscenic": "totalScenic",
+    "missingimages": "missingImages",
+    "undertargetimages": "underTargetImages",
+    "spotswith3images": "spotsWith3Images",
+    "spotswith4images": "spotsWith4Images",
+    "missingprofiles": "missingProfiles",
+    "missingfood": "missingFood",
+    "missingpois": "missingPois",
+    "pendingprofilecandidates": "pendingProfileCandidates",
+    "pendingfoodcandidates": "pendingFoodCandidates",
+    "pendinghikingcandidates": "pendingHikingCandidates",
+    "pendingnearbycandidates": "pendingNearbyCandidates",
+    "lowriskprofilecandidates": "lowRiskProfileCandidates",
+    "pendingimagecandidates": "pendingImageCandidates",
+    "lowriskimagecandidates": "lowRiskImageCandidates",
+}
 
 
 def web_enrichment_overview() -> dict:
@@ -16,6 +33,24 @@ def web_enrichment_overview() -> dict:
                 SELECT
                   COUNT(*) AS totalScenic,
                   SUM(CASE WHEN cover_image_url IS NULL OR cover_image_url='' THEN 1 ELSE 0 END) AS missingImages,
+                  SUM(CASE WHEN (
+                    SELECT COUNT(*)
+                    FROM scenic_images
+                    WHERE scenic_images.scenic_id=scenic_spots.id
+                      AND status='approved'
+                  ) < 4 THEN 1 ELSE 0 END) AS underTargetImages,
+                  SUM(CASE WHEN (
+                    SELECT COUNT(*)
+                    FROM scenic_images
+                    WHERE scenic_images.scenic_id=scenic_spots.id
+                      AND status='approved'
+                  ) >= 3 THEN 1 ELSE 0 END) AS spotsWith3Images,
+                  SUM(CASE WHEN (
+                    SELECT COUNT(*)
+                    FROM scenic_images
+                    WHERE scenic_images.scenic_id=scenic_spots.id
+                      AND status='approved'
+                  ) >= 4 THEN 1 ELSE 0 END) AS spotsWith4Images,
                   SUM(CASE WHEN summary IS NULL OR summary='' OR description IS NULL OR description='' THEN 1 ELSE 0 END) AS missingProfiles,
                   SUM(CASE WHEN nearby_food IS NULL OR nearby_food='' OR nearby_food='[]' THEN 1 ELSE 0 END) AS missingFood,
                   SUM(CASE WHEN nearby_pois IS NULL OR nearby_pois='' OR nearby_pois='[]' THEN 1 ELSE 0 END) AS missingPois
@@ -65,9 +100,9 @@ def web_enrichment_overview() -> dict:
             ).fetchall()
         )
 
-    profile_low = int(profile.get("lowRiskProfileCandidates") or 0)
-    image_low = int(image.get("lowRiskImageCandidates") or 0)
-    overview = _zero_none(scenic | profile | image)
+    overview = _zero_none(_canonical_metric_keys(scenic | profile | image))
+    profile_low = int(overview.get("lowRiskProfileCandidates") or 0)
+    image_low = int(overview.get("lowRiskImageCandidates") or 0)
     overview["lowRiskCandidates"] = profile_low + image_low
     overview["pendingCandidates"] = int(overview.get("pendingProfileCandidates") or 0) + int(overview.get("pendingImageCandidates") or 0)
     overview["crawlerJob"] = crawler
@@ -228,3 +263,7 @@ def _normalize_task(row: dict) -> dict:
 
 def _zero_none(values: dict) -> dict:
     return {key: (0 if value is None else value) for key, value in values.items()}
+
+
+def _canonical_metric_keys(values: dict) -> dict:
+    return {METRIC_KEY_MAP.get(str(key).lower(), key): value for key, value in values.items()}

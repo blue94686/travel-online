@@ -44,6 +44,47 @@ class ScenicNationalSourceTest(unittest.TestCase):
         self.assertGreaterEqual(total, 3)
         self.assertTrue(any(item["id"] == "jingdian-2" for item in items))
 
+    def test_public_scenic_list_uses_clean_national_source_not_legacy_rows(self):
+        conn = self.make_db()
+        conn.execute(
+            """
+            INSERT INTO scenic_spots (
+              slug,name,province,city,district,level,rating,address,summary,description,tags,
+              ticket_price,opening_hours,best_season,cover_image_url,gallery,weather,map_point,nearby_pois,recommended_routes
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "legacy-fake",
+                "旧表假数据",
+                "浙江省",
+                "宁波市",
+                "镇海区",
+                "住宅小区",
+                4.9,
+                "旧地址",
+                "旧表里残留的假简介",
+                "这条记录不应该进入公开景点列表",
+                '["旧数据"]',
+                "",
+                "",
+                "",
+                "",
+                "[]",
+                "{}",
+                "{}",
+                "[]",
+                "[]",
+            ),
+        )
+
+        with self.patch_db(conn):
+            items = scenic_service.list_scenic(limit=10)
+            total = scenic_service.count_scenic()
+
+        self.assertEqual(total, 3)
+        self.assertEqual({item["source"] for item in items}, {"jingdian"})
+        self.assertNotIn("旧表假数据", {item["name"] for item in items})
+
     def test_list_scenic_filters_national_source_by_three_level_region(self):
         conn = self.make_db()
         with self.patch_db(conn):

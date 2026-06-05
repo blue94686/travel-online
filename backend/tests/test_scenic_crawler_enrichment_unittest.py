@@ -178,6 +178,132 @@ class ScenicCrawlerEnrichmentTest(unittest.TestCase):
 
         self.run_with_db(assertions)
 
+    def test_direct_merge_public_profile_candidates_updates_summary_and_description(self):
+        def assertions(conn):
+            conn.execute(
+                """
+                UPDATE scenic_spots
+                SET summary='本地规则摘要', description='本地规则介绍', source_url='local-sql:tpt_data_jingdian:1'
+                WHERE id=1
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO scenic_profile_candidates (
+                  id, scenic_id, candidate_type, title, content, source_url,
+                  source_name, source_type, confidence, risk_level, status
+                ) VALUES (
+                  30, 1, 'summary', '测试山景区公开介绍',
+                  '测试山景区位于浙江省杭州市，是以山岳景观、轻徒步路线和城市近郊观景体验为特色的旅游景区。',
+                  'https://zh.wikipedia.org/wiki/test-mountain',
+                  '维基百科', 'wikipedia', 84, 'medium', 'pending'
+                )
+                """
+            )
+
+            result = crawler.merge_profile_candidates_direct(limit=10)
+            self.assertEqual(result["mergedProfiles"], 1)
+
+            scenic = conn.execute("SELECT summary, description, source_url FROM scenic_spots WHERE id=1").fetchone()
+            self.assertIn("测试山景区位于浙江省杭州市", scenic["summary"])
+            self.assertEqual(scenic["description"], "测试山景区位于浙江省杭州市，是以山岳景观、轻徒步路线和城市近郊观景体验为特色的旅游景区。")
+            self.assertEqual(scenic["source_url"], "https://zh.wikipedia.org/wiki/test-mountain")
+            candidate = conn.execute("SELECT status, reviewed_by FROM scenic_profile_candidates WHERE id=30").fetchone()
+            self.assertEqual(candidate["status"], "merged")
+            self.assertEqual(candidate["reviewed_by"], "auto_crawler")
+
+        self.run_with_db(assertions)
+
+    def test_batch_can_directly_merge_public_profile_candidates(self):
+        def fake_public_bundle(scenic, include_osm=True):
+            return (
+                [
+                    {
+                        "scenic_id": scenic["id"],
+                        "candidate_type": "summary",
+                        "title": "测试山景区公开介绍",
+                        "content": "测试山景区是一个适合直接补全资料的公开来源景区介绍。",
+                        "source_url": "https://zh.wikipedia.org/wiki/test-mountain",
+                        "source_name": "维基百科",
+                        "source_type": "wikipedia",
+                        "confidence": 82,
+                        "risk_level": "medium",
+                    }
+                ],
+                [],
+                [],
+            )
+
+        def assertions(conn):
+            with patch.object(crawler, "public_source_bundle_detailed", fake_public_bundle):
+                result = crawler.run_crawler_batch(limit=1, include_pois=False, direct_merge_profiles=True)
+            self.assertEqual(result["profileCandidates"], 1)
+            self.assertEqual(result["directMergedProfiles"], 1)
+
+            scenic = conn.execute("SELECT summary, description, source_url FROM scenic_spots WHERE id=1").fetchone()
+            self.assertEqual(scenic["description"], "测试山景区是一个适合直接补全资料的公开来源景区介绍。")
+            self.assertEqual(scenic["source_url"], "https://zh.wikipedia.org/wiki/test-mountain")
+            self.assertEqual(conn.execute("SELECT status FROM scenic_profile_candidates").fetchone()["status"], "merged")
+
+        self.run_with_db(assertions)
+
+    def test_backfill_public_source_links_replaces_local_sql_source(self):
+        def assertions(conn):
+            conn.execute("UPDATE scenic_spots SET source_url='local-sql:tpt_data_jingdian:1' WHERE id=1")
+
+            result = crawler.backfill_public_source_links(limit=10)
+            self.assertEqual(result["updated"], 1)
+
+            scenic = conn.execute("SELECT source_url FROM scenic_spots WHERE id=1").fetchone()
+            self.assertTrue(scenic["source_url"].startswith("https://uri.amap.com/marker?position=120.14,30.24"))
+
+        self.run_with_db(assertions)
+
+    def test_batch_includes_spots_with_cover_but_under_target_gallery(self):
+        def fake_public_bundle(scenic, include_osm=True):
+            return (
+                [],
+                [
+                    {
+                        "scenic_id": scenic["id"],
+                        "image_url": "https://img.example.test/mountain-2.jpg",
+                        "source_url": "https://commons.wikimedia.org/wiki/File:test-2.jpg",
+                        "source_type": "wikimedia_commons",
+                        "license": "CC BY-SA",
+                        "risk_level": "low",
+                        "confidence": 86,
+                    }
+                ],
+                [],
+            )
+
+        def assertions(conn):
+            conn.execute(
+                """
+                UPDATE scenic_spots
+                SET summary='完整摘要', description='完整介绍', cover_image_url='https://img.example.test/mountain-1.jpg',
+                    gallery='["https://img.example.test/mountain-1.jpg"]',
+                    nearby_food='[{"name":"面馆"}]', nearby_pois='[{"name":"观景点"}]', recommended_routes='["入口 -> 观景点"]'
+                WHERE id=1
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO scenic_images (scenic_id,url,status,is_cover,quality_score,source)
+                VALUES (1,'https://img.example.test/mountain-1.jpg','approved',1,80,'test')
+                """
+            )
+            with patch.object(crawler, "public_source_bundle_detailed", fake_public_bundle):
+                result = crawler.run_crawler_batch(limit=1, include_pois=False, target_image_count=4)
+            self.assertEqual(result["read"], 1)
+            self.assertEqual(result["imageCandidates"], 1)
+
+            with patch.object(crawler, "public_source_bundle_detailed", fake_public_bundle):
+                done = crawler.run_crawler_batch(limit=1, include_pois=False, target_image_count=1)
+            self.assertEqual(done["read"], 0)
+
+        self.run_with_db(assertions)
+
     def test_status_reports_missing_images_and_low_risk_candidates(self):
         def assertions(conn):
             conn.execute(
@@ -197,6 +323,7 @@ class ScenicCrawlerEnrichmentTest(unittest.TestCase):
 
             status = crawler.crawler_status()
             self.assertEqual(status["stats"]["missingImages"], 1)
+            self.assertEqual(status["stats"]["underTargetImages"], 1)
             self.assertEqual(status["stats"]["pendingProfileCandidates"], 1)
             self.assertEqual(status["stats"]["pendingImageCandidates"], 1)
             self.assertEqual(status["stats"]["lowRiskCandidates"], 2)

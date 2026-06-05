@@ -17,6 +17,7 @@ BING_IMAGE_ENDPOINT = "https://api.bing.microsoft.com/v7.0/images/search"
 WIKIPEDIA_ENDPOINT = "https://zh.wikipedia.org/w/api.php"
 WIKIVOYAGE_ENDPOINT = "https://zh.wikivoyage.org/w/api.php"
 COMMONS_ENDPOINT = "https://commons.wikimedia.org/w/api.php"
+OPENVERSE_IMAGES_ENDPOINT = "https://api.openverse.org/v1/images/"
 OVERPASS_ENDPOINTS = (
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
@@ -25,6 +26,26 @@ OVERPASS_ENDPOINTS = (
 MCT_SCENIC_URL = "https://www.mct.gov.cn/"
 SOURCE_COOLDOWN_SECONDS = 300
 _SOURCE_COOLDOWNS: dict[str, float] = {}
+
+
+def _env_float(name: str, default: float, lower: float, upper: float) -> float:
+    try:
+        return max(lower, min(float(os.environ.get(name, default) or default), upper))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name: str, default: int, lower: int, upper: int) -> int:
+    try:
+        return max(lower, min(int(os.environ.get(name, default) or default), upper))
+    except (TypeError, ValueError):
+        return default
+
+
+DEFAULT_HTTP_TIMEOUT_SECONDS = _env_float("SCENIC_EXTERNAL_HTTP_TIMEOUT_SECONDS", 6.0, 1.0, 20.0)
+DEFAULT_HTTP_RETRIES = _env_int("SCENIC_EXTERNAL_HTTP_RETRIES", 1, 0, 3)
+MEDIAWIKI_TIMEOUT_SECONDS = _env_float("SCENIC_MEDIAWIKI_TIMEOUT_SECONDS", 5.0, 1.0, 12.0)
+IMAGE_SEARCH_TIMEOUT_SECONDS = _env_float("SCENIC_IMAGE_SEARCH_TIMEOUT_SECONDS", 4.0, 1.0, 10.0)
 
 LOW_TRUST_DOMAINS = (
     "bing.com",
@@ -68,6 +89,7 @@ def external_enrichment_readiness():
         "wikipedia": True,
         "wikivoyage": True,
         "wikimedia_commons": True,
+        "openverse": True,
         "openstreetmap_overpass": True,
         "mct_official": True,
         "ctrip_open": bool(config.get("ctrip_open")),
@@ -77,7 +99,7 @@ def external_enrichment_readiness():
         "storage_policy": "本地只存轻量索引和审核状态，图片保持外链或后续转对象存储/CDN。",
         "review_policy": "外部资料进入候选池，管理员审核通过后才写入正式景区资料或图片索引。",
         "fallback_policy": "前台优先使用已审核资料；外部失败时使用本地基础资料、占位图和候选重试。",
-        "provider_order": ["wikimedia_commons", "wikipedia", "wikivoyage", "openstreetmap_overpass", "mct_official", "bing_image", "bing_search", "baidu_map", "tencent_lbs", "amap_web_service"],
+        "provider_order": ["wikimedia_commons", "openverse", "wikipedia", "wikivoyage", "openstreetmap_overpass", "mct_official", "bing_image", "bing_search", "baidu_map", "tencent_lbs", "amap_web_service"],
         "quota_policy": "批量补全默认不使用高德；如配额恢复，可在接口参数里显式开启付费/配额型来源。",
         "note": "Wikipedia、Wikivoyage、Commons、OpenStreetMap 为公开来源；文旅部用于官方名录校验；携程、马蜂窝、百度、腾讯需后台配置后再启用。",
     }
@@ -95,20 +117,23 @@ def external_enrich_profile_batch(
 ):
     limit = max(1, min(int(limit or 20), 200))
     offset = max(0, int(offset or 0))
-    sql = "SELECT * FROM scenic_spots WHERE 1=1"
-    params = []
-    if province:
-        sql += " AND province=?"
-        params.append(province)
-    if city:
-        sql += " AND city=?"
-        params.append(city)
-    if only_missing_media:
-        sql += " AND (official_website IS NULL OR official_website='' OR cover_image_url IS NULL OR cover_image_url='')"
-    sql += " ORDER BY id ASC LIMIT ? OFFSET ?"
-    params.extend([limit, offset])
 
     with get_db() as db:
+        sql = "SELECT * FROM scenic_spots WHERE 1=1"
+        params = []
+        if province:
+            sql += " AND province=?"
+            params.append(province)
+        if city:
+            sql += " AND city=?"
+            params.append(city)
+        if only_missing_media:
+            missing_media = ["cover_image_url IS NULL OR cover_image_url=''"]
+            if _table_has_column(db, "scenic_spots", "official_website"):
+                missing_media.append("official_website IS NULL OR official_website=''")
+            sql += f" AND ({' OR '.join(missing_media)})"
+        sql += " ORDER BY id ASC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
         rows = rows_to_list(db.execute(sql, params).fetchall())
         config = _provider_config(db)
 
@@ -196,7 +221,7 @@ def public_source_bundle(scenic, include_osm: bool = True):
 
 
 def public_sources_blocked_seconds(include_osm: bool = True):
-    providers = ["wikipedia", "wikivoyage", "wikimedia_commons"]
+    providers = ["wikipedia", "wikivoyage", "wikimedia_commons", "openverse"]
     if include_osm:
         providers.append("openstreetmap_overpass")
     remaining = [_cooldown_remaining(provider) for provider in providers]
@@ -206,15 +231,22 @@ def public_sources_blocked_seconds(include_osm: bool = True):
     return 0
 
 
-def public_source_bundle_detailed(scenic, include_osm: bool = True):
+def public_source_bundle_detailed(
+    scenic,
+    include_osm: bool = True,
+    include_wikivoyage: bool = True,
+    include_commons: bool = True,
+    include_openverse: bool = True,
+):
     scenic = row_to_dict(scenic)
     profile_candidates = []
     image_candidates = []
     failures = []
     fetchers = [
         ("wikipedia", _wikipedia_candidates),
-        ("wikivoyage", _wikivoyage_candidates),
     ]
+    if include_wikivoyage:
+        fetchers.append(("wikivoyage", _wikivoyage_candidates))
     if include_osm:
         fetchers.append(("openstreetmap_overpass", _osm_candidates))
     for provider, fetcher in fetchers:
@@ -234,15 +266,26 @@ def public_source_bundle_detailed(scenic, include_osm: bool = True):
             _record_source_cooldown(provider, exc)
             failures.append(_provider_failure(provider, exc))
         time.sleep(0.12)
-    commons_cooldown = _cooldown_remaining("wikimedia_commons")
-    if commons_cooldown:
-        failures.append(_provider_failure("wikimedia_commons", f"cooldown {commons_cooldown}s"))
-    else:
-        try:
-            image_candidates.extend(_commons_image_candidates(scenic))
-        except RuntimeError as exc:
-            _record_source_cooldown("wikimedia_commons", exc)
-            failures.append(_provider_failure("wikimedia_commons", exc))
+    if include_commons:
+        commons_cooldown = _cooldown_remaining("wikimedia_commons")
+        if commons_cooldown:
+            failures.append(_provider_failure("wikimedia_commons", f"cooldown {commons_cooldown}s"))
+        else:
+            try:
+                image_candidates.extend(_commons_image_candidates(scenic))
+            except RuntimeError as exc:
+                _record_source_cooldown("wikimedia_commons", exc)
+                failures.append(_provider_failure("wikimedia_commons", exc))
+    if include_openverse:
+        openverse_cooldown = _cooldown_remaining("openverse")
+        if openverse_cooldown:
+            failures.append(_provider_failure("openverse", f"cooldown {openverse_cooldown}s"))
+        else:
+            try:
+                image_candidates.extend(_openverse_image_candidates(scenic))
+            except RuntimeError as exc:
+                _record_source_cooldown("openverse", exc)
+                failures.append(_provider_failure("openverse", exc))
     profile_candidates.sort(key=lambda item: int(item.get("confidence") or 0), reverse=True)
     return profile_candidates[:8], _dedupe_images(image_candidates)[:8], failures
 
@@ -438,7 +481,7 @@ def _mediawiki_candidates(scenic, endpoint, source_name, source_type, page_base,
             "titles": title,
             "origin": "*",
         }
-        payload = _http_get_json(f"{endpoint}?{urlencode(params)}")
+        payload = _http_get_json(f"{endpoint}?{urlencode(params)}", timeout=MEDIAWIKI_TIMEOUT_SECONDS, retries=1)
         pages = ((payload or {}).get("query") or {}).get("pages") or {}
         for page in pages.values():
             if page.get("missing") is not None:
@@ -540,30 +583,86 @@ def _osm_candidates(scenic):
 
 
 def _commons_image_candidates(scenic):
+    candidates = []
+    for search_term in _commons_search_terms(scenic):
+        params = {
+            "action": "query",
+            "format": "json",
+            "generator": "search",
+            "gsrnamespace": 6,
+            "gsrlimit": 5,
+            "gsrsearch": search_term,
+            "prop": "imageinfo",
+            "iiprop": "url|extmetadata|mime",
+            "iiurlwidth": 900,
+            "origin": "*",
+        }
+        payload = _http_get_json(f"{COMMONS_ENDPOINT}?{urlencode(params)}", timeout=IMAGE_SEARCH_TIMEOUT_SECONDS, retries=0)
+        pages = ((payload or {}).get("query") or {}).get("pages") or {}
+        for page in pages.values():
+            imageinfo = (page.get("imageinfo") or [{}])[0]
+            image_url = imageinfo.get("url") or ""
+            if not _is_supported_image_file(image_url, imageinfo.get("mime") or ""):
+                continue
+            meta = imageinfo.get("extmetadata") or {}
+            license_name = (meta.get("LicenseShortName") or {}).get("value") or ""
+            attribution = _clean_metadata((meta.get("Artist") or {}).get("value") or (meta.get("Credit") or {}).get("value") or "")
+            raw = {"page": page, "license": license_name, "attribution": attribution, "search": search_term}
+            candidates.append(
+                _image_candidate(
+                    scenic,
+                    image_url=image_url,
+                    thumbnail_url=imageinfo.get("thumburl") or image_url,
+                    source_url=(meta.get("ObjectURL") or {}).get("value") or imageinfo.get("descriptionurl") or "",
+                    title=page.get("title") or scenic["name"],
+                    source_name="Wikimedia Commons",
+                    source_type="wikimedia_commons",
+                    confidence=0.58,
+                    risk_level="medium",
+                    raw=raw,
+                    license_name=license_name,
+                    attribution=attribution,
+                )
+            )
+        if candidates:
+            break
+        time.sleep(0.08)
+    if not candidates:
+        candidates.extend(_commons_geosearch_image_candidates(scenic))
+    return _dedupe_images(candidates)[:3]
+
+
+def _commons_geosearch_image_candidates(scenic):
+    lat = _float_or_none(scenic.get("latitude") or scenic.get("web_latitude"))
+    lon = _float_or_none(scenic.get("longitude") or scenic.get("web_longitude"))
+    if lat is None or lon is None:
+        return []
     params = {
         "action": "query",
         "format": "json",
-        "generator": "search",
-        "gsrnamespace": 6,
-        "gsrlimit": 5,
-        "gsrsearch": _search_keyword(scenic, "scenic"),
-        "prop": "imageinfo",
+        "generator": "geosearch",
+        "ggscoord": f"{lat}|{lon}",
+        "ggsradius": 5000,
+        "ggslimit": 6,
+        "ggsnamespace": 6,
+        "ggsprimary": "all",
+        "prop": "imageinfo|coordinates",
         "iiprop": "url|extmetadata|mime",
         "iiurlwidth": 900,
         "origin": "*",
     }
-    payload = _http_get_json(f"{COMMONS_ENDPOINT}?{urlencode(params)}")
+    payload = _http_get_json(f"{COMMONS_ENDPOINT}?{urlencode(params)}", timeout=IMAGE_SEARCH_TIMEOUT_SECONDS, retries=0)
     pages = ((payload or {}).get("query") or {}).get("pages") or {}
     candidates = []
     for page in pages.values():
         imageinfo = (page.get("imageinfo") or [{}])[0]
         image_url = imageinfo.get("url") or ""
-        if not image_url:
+        if not _is_supported_image_file(image_url, imageinfo.get("mime") or ""):
             continue
         meta = imageinfo.get("extmetadata") or {}
         license_name = (meta.get("LicenseShortName") or {}).get("value") or ""
         attribution = _clean_metadata((meta.get("Artist") or {}).get("value") or (meta.get("Credit") or {}).get("value") or "")
-        raw = {"page": page, "license": license_name, "attribution": attribution}
+        raw = {"page": page, "license": license_name, "attribution": attribution, "search": "commons_geosearch"}
         candidates.append(
             _image_candidate(
                 scenic,
@@ -572,15 +671,92 @@ def _commons_image_candidates(scenic):
                 source_url=(meta.get("ObjectURL") or {}).get("value") or imageinfo.get("descriptionurl") or "",
                 title=page.get("title") or scenic["name"],
                 source_name="Wikimedia Commons",
-                source_type="wikimedia_commons",
-                confidence=0.58,
+                source_type="wikimedia_commons_geosearch",
+                confidence=0.52,
                 risk_level="medium",
                 raw=raw,
                 license_name=license_name,
                 attribution=attribution,
             )
         )
+    return candidates
+
+
+def _commons_search_terms(scenic):
+    terms = []
+    for variant in _title_variants(scenic.get("name") or ""):
+        terms.append(variant)
+        terms.append(f"{variant} 中国 景区")
+    terms.append(_search_keyword(scenic, "scenic"))
+    unique = []
+    for term in terms:
+        term = _clean_text(term)
+        if term and term not in unique:
+            unique.append(term)
+    return unique[:5]
+
+
+def _openverse_image_candidates(scenic):
+    candidates = []
+    for search_term in _openverse_search_terms(scenic):
+        params = {
+            "q": search_term,
+            "page_size": 5,
+            "mature": "false",
+            "filter_dead": "true",
+        }
+        payload = _http_get_json(f"{OPENVERSE_IMAGES_ENDPOINT}?{urlencode(params)}", timeout=4, retries=0)
+        for item in (payload or {}).get("results") or []:
+            image_url = item.get("url") or ""
+            if not image_url:
+                continue
+            license_name = _openverse_license(item)
+            candidates.append(
+                _image_candidate(
+                    scenic,
+                    image_url=image_url,
+                    thumbnail_url=item.get("thumbnail") or image_url,
+                    source_url=item.get("foreign_landing_url") or item.get("url") or "",
+                    title=item.get("title") or scenic["name"],
+                    source_name="Openverse",
+                    source_type="openverse",
+                    confidence=0.48,
+                    risk_level="medium",
+                    raw=item,
+                    license_name=license_name,
+                    attribution=_clean_metadata(item.get("creator") or ""),
+                )
+            )
+        if candidates:
+            break
+        time.sleep(0.08)
     return candidates[:3]
+
+
+def _openverse_search_terms(scenic):
+    terms = []
+    for variant in _title_variants(scenic.get("name") or ""):
+        terms.append(f"{variant} 中国 景区")
+        terms.append(variant)
+    if scenic.get("province") or scenic.get("city"):
+        terms.append(_search_keyword(scenic, "旅游 风景"))
+    unique = []
+    for term in terms:
+        term = _clean_text(term)
+        if term and term not in unique:
+            unique.append(term)
+    return unique[:5]
+
+
+def _openverse_license(item):
+    license_code = _clean_text(item.get("license") or "").upper()
+    version = _clean_text(item.get("license_version") or "")
+    if not license_code:
+        return ""
+    if license_code in {"PDM", "CC0"}:
+        return license_code
+    name = f"CC {license_code.replace('-', '-')}"
+    return f"{name} {version}".strip()
 
 
 def _dedupe_images(candidates):
@@ -594,6 +770,25 @@ def _dedupe_images(candidates):
         deduped.append(item)
     deduped.sort(key=lambda item: int(item.get("quality_score") or 0), reverse=True)
     return deduped
+
+
+def _is_supported_image_file(url: str, mime: str = "") -> bool:
+    value = (url or "").lower()
+    mime = (mime or "").lower()
+    if mime and not mime.startswith("image/"):
+        return False
+    blocked_suffixes = (".pdf", ".djvu", ".tif", ".tiff", ".svg")
+    if any(value.split("?", 1)[0].endswith(suffix) for suffix in blocked_suffixes):
+        return False
+    return bool(url)
+
+
+def _table_has_column(db, table_name, column_name):
+    try:
+        rows = db.execute(f"PRAGMA table_info({table_name})").fetchall()
+    except Exception:
+        return False
+    return any(row["name"] == column_name for row in rows)
 
 
 def _cooldown_remaining(provider):
@@ -666,7 +861,9 @@ def _osm_confidence(scenic_name, element_name, tags):
     return max(40, min(score, 84))
 
 
-def _http_get_json(url, headers=None, timeout=8, retries=2):
+def _http_get_json(url, headers=None, timeout=None, retries=None):
+    timeout = DEFAULT_HTTP_TIMEOUT_SECONDS if timeout is None else max(1.0, min(float(timeout), 20.0))
+    retries = DEFAULT_HTTP_RETRIES if retries is None else max(0, min(int(retries), 3))
     request = Request(url, headers={"User-Agent": "ScenicOnline/1.0 (+admin enrichment)", **(headers or {})})
     last_error = None
     for attempt in range(max(0, retries) + 1):

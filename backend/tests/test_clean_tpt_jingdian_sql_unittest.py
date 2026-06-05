@@ -73,6 +73,7 @@ class CleanTptJingdianSqlTest(unittest.TestCase):
             _row(1, "瑞云山风景区", "风景名胜;国家A级景区;4A景区", "4A"),
             _row(2, "瑞云山风景区服务中心", "风景名胜;国家A级景区;4A景区", "4A"),
             _row(3, "某景区旅游集散中心", "风景名胜;国家A级景区;5A景区", "5A"),
+            _row(4, "长隆旅游度假区(南大路入口)", "风景名胜;国家A级景区;5A景区", "5A"),
         ]
 
         kept, removed, reasons, _samples = cleaner.deduplicate(rows, major_only=True)
@@ -80,6 +81,7 @@ class CleanTptJingdianSqlTest(unittest.TestCase):
         self.assertEqual([row["id"] for row in kept], [1])
         self.assertEqual(removed[2], "accessory_facility")
         self.assertEqual(removed[3], "accessory_facility")
+        self.assertEqual(removed[4], "accessory_gate_or_entrance")
         self.assertEqual(reasons["accessory_facility"], 2)
 
     def test_deduplicate_major_only_merges_same_name_same_region(self):
